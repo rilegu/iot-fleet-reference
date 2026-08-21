@@ -233,6 +233,11 @@ jobs:
           curl -fsS -o /dev/null http://localhost:8090/_framework/blazor.web.js
           echo "dashboard and framework assets serve"
 
+      - name: Chaos scenarios
+        # Runs last in this job because every scenario kills a component. Anything asserted
+        # after it would be measuring a stack that has just been restarted several times.
+        run: python tools/chaos_test.py
+
       - name: Diagnostics on failure
         if: failure()
         run: |

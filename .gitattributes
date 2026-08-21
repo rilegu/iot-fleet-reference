@@ -1,0 +1,17 @@
+# Normalise line endings.
+#
+# core.autocrlf gives the working tree CRLF on Windows while git stores LF. That is mostly
+# harmless, but it makes gofmt disagree with CI — gofmt reads the working tree and sees
+# CRLF, while the Linux runner checks out LF and is happy. Worse, a shell script or
+# container entrypoint checked out with CRLF fails at runtime with an error that names the
+# wrong thing entirely.
+#
+# Forcing LF in the working tree makes local checks and CI agree.
+
+* text=auto eol=lf
+
+# Binary, never translated.
+*.png binary
+*.jpg binary
+*.pdf binary
+*.bundle binary
