@@ -1,0 +1,182 @@
+@page "/"
+@rendermode InteractiveServer
+@using Fleet.Client.Core
+@using FleetDashboard
+@implements IDisposable
+@inject FleetView View
+
+@*
+    The fleet grid.
+
+    Named Dashboard rather than Fleet: a component named `Fleet` would shadow the root of
+    the `Fleet.Client.Core` namespace and make every reference to it ambiguous.
+
+    Two things make a thousand live devices renderable, and neither is optional:
+
+    1. The server sends coalesced deltas, so this component is woken a few times a second
+       rather than a thousand times. That work happens in the API, not here.
+
+    2. <Virtualize> renders only the rows actually on screen — roughly forty of them —
+       instead of a thousand. This matters far more in Blazor Server than in a local UI
+       framework: every rendered row becomes DOM diff traffic over the circuit's WebSocket,
+       so rendering rows nobody can see would spend bandwidth as well as CPU.
+
+    Without both, the naive version is about a million row-renders per second and no
+    framework survives it.
+*@
+
+<PageTitle>Fleet</PageTitle>
+
+<header class="bar">
+    <h1>Fleet</h1>
+
+    <div class="conn @(View.Connection.Connected ? "up" : "down")">
+        @if (View.Connection.Connected)
+        {
+            <span>live · @View.Store.CadenceMs ms cadence · frame @View.Store.LastFrame</span>
+        }
+        else
+        {
+            <span>reconnecting@(View.Connection.LastError is null ? "" : $" — {View.Connection.LastError}")</span>
+        }
+    </div>
+</header>
+
+@{
+    var agg = View.Store.Aggregates;
+}
+
+<div class="stats">
+    <div class="stat"><span class="n">@agg.Total</span><span class="l">devices</span></div>
+    <div class="stat ok"><span class="n">@agg.Online</span><span class="l">online</span></div>
+    <div class="stat @(agg.Offline > 0 ? "warn" : "")"><span class="n">@agg.Offline</span><span class="l">offline</span></div>
+    <div class="stat @(agg.Alerting > 0 ? "bad" : "")"><span class="n">@agg.Alerting</span><span class="l">alerting</span></div>
+    <div class="stat @(agg.Gaps > 0 ? "warn" : "")"><span class="n">@agg.Gaps</span><span class="l">gaps</span></div>
+    <div class="stat @(agg.StaleDropped > 0 ? "warn" : "")"><span class="n">@agg.StaleDropped</span><span class="l">stale</span></div>
+    <div class="stat"><span class="n">@agg.Sites</span><span class="l">sites</span></div>
+</div>
+
+<div class="filters">
+    @* @bind:event="oninput" gives filter-as-you-type. Cheap because filtering is cached and
+       the fleet is already in memory: no request leaves the browser. *@
+    <input type="search" placeholder="device, site or firmware"
+           @bind="View.Search" @bind:event="oninput" />
+
+    <select @bind="View.Site">
+        <option value="">all sites</option>
+        @foreach (var s in View.Sites)
+        {
+            <option value="@s">@s</option>
+        }
+    </select>
+
+    <label><input type="checkbox" @bind="View.OnlineOnly" /> online only</label>
+    <label><input type="checkbox" @bind="View.AlertingOnly" /> alerting only</label>
+
+    <span class="count">@View.Devices.Length shown</span>
+</div>
+
+<div class="grid">
+    <div class="row head">
+        <span class="c-id"    @onclick="() => View.SortBy(SortColumn.Device)">Device @Caret(SortColumn.Device)</span>
+        <span class="c-site"  @onclick="() => View.SortBy(SortColumn.Site)">Site @Caret(SortColumn.Site)</span>
+        <span class="c-stat"  @onclick="() => View.SortBy(SortColumn.Status)">Status @Caret(SortColumn.Status)</span>
+        <span class="c-fw">Firmware</span>
+        <span class="c-num"   @onclick="() => View.SortBy(SortColumn.Temp)">°C @Caret(SortColumn.Temp)</span>
+        <span class="c-num">RH%</span>
+        <span class="c-num"   @onclick="() => View.SortBy(SortColumn.Voltage)">V @Caret(SortColumn.Voltage)</span>
+        <span class="c-num"   @onclick="() => View.SortBy(SortColumn.Rssi)">RSSI @Caret(SortColumn.Rssi)</span>
+        <span class="c-num"   @onclick="() => View.SortBy(SortColumn.Seq)">Seq @Caret(SortColumn.Seq)</span>
+        <span class="c-num"   @onclick="() => View.SortBy(SortColumn.Gaps)">Gaps @Caret(SortColumn.Gaps)</span>
+        <span class="c-evt">Last event</span>
+    </div>
+
+    <div class="body">
+        @* ItemSize must match the CSS row height. Virtualize uses it to decide how many
+           rows to render and where to place the scroll spacers; a mismatch shows up as
+           rows jumping or blank bands while scrolling. *@
+        <Virtualize TItem="DeviceState" Items="@_rows" ItemSize="26" Context="d" OverscanCount="6">
+            @* @key lets Blazor match a row to the same device across renders instead of
+               re-creating elements when the sort order shifts. Without it, a re-sort
+               rebuilds every visible row rather than moving them. *@
+            <div class="row @(d.Online ? "" : "offline") @(d.JustChanged ? "hit" : "")"
+                 @key="d.DeviceId"
+                 @onclick="() => View.Select(d.DeviceId)">
+                <span class="c-id">@d.DeviceId</span>
+                <span class="c-site">@d.Site</span>
+                <span class="c-stat">
+                    @if (d.Online)
+                    {
+                        <em class="badge ok">online</em>
+                    }
+                    else
+                    {
+                        <em class="badge bad">@(d.OfflineReason ?? "offline")</em>
+                    }
+                </span>
+                <span class="c-fw">@d.FwVersion</span>
+                <span class="c-num">@d.Metrics?.TempC.ToString("0.0")</span>
+                <span class="c-num">@d.Metrics?.HumidityPct.ToString("0.0")</span>
+                <span class="c-num">@d.Metrics?.VoltageV.ToString("0.00")</span>
+                <span class="c-num">@d.Metrics?.RssiDbm</span>
+                <span class="c-num dim">@d.Seq</span>
+                <span class="c-num @(d.Gaps > 0 ? "warn" : "dim")">@d.Gaps</span>
+                <span class="c-evt">
+                    @if (d.LastEvent is not null)
+                    {
+                        <em class="badge sev-@d.LastEventSeverity">@d.LastEvent</em>
+                    }
+                </span>
+            </div>
+        </Virtualize>
+    </div>
+</div>
+
+@if (View.SelectedDevice is { } sel)
+{
+    <DeviceDetail Device="sel" OnClose="() => View.Select(null)" />
+}
+
+@code {
+    private DeviceState[] _rows = Array.Empty<DeviceState>();
+
+    protected override void OnInitialized()
+    {
+        View.Store.Changed += OnStoreChanged;
+        View.Connection.StateChanged += OnStoreChanged;
+        _rows = View.Devices;
+    }
+
+    // The connection is started here rather than in OnInitialized, because with prerendering
+    // OnInitialized runs twice: once while rendering static HTML for the initial response,
+    // and again once the interactive circuit is established. Connecting in the first pass
+    // opens a socket in a scope that is discarded moments later — wasteful, and the
+    // disposal races the in-flight connect. OnAfterRenderAsync only runs on the interactive
+    // circuit, so one page load means exactly one connection.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        View.Connection.Start();
+        await Task.CompletedTask;
+    }
+
+    private void OnStoreChanged()
+    {
+        _ = InvokeAsync(() =>
+        {
+            // Recompute once per frame and hold the result, rather than letting the render
+            // fragment call into the (cached, but not free) projection repeatedly.
+            _rows = View.Devices;
+            StateHasChanged();
+        });
+    }
+
+    private MarkupString Caret(SortColumn column) =>
+        (MarkupString)(View.Sort != column ? "" : View.Descending ? "&#9662;" : "&#9652;");
+
+    public void Dispose()
+    {
+        View.Store.Changed -= OnStoreChanged;
+        View.Connection.StateChanged -= OnStoreChanged;
+    }
+}

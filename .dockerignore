@@ -9,6 +9,6 @@
 **/obj/
 
 # Not part of any image.
-services/api-spike/
+
 services/api.tests/
 docs/
