@@ -1,9 +1,10 @@
 # Contracts
 
-> **Draft.** These shapes are being validated by the simulator and an exploratory consumer.
-> They become JSON Schema, OpenAPI and AsyncAPI documents once the ingest service is built,
-> at which point this file is replaced by generated artifacts and a versioning policy.
-> Nothing here is frozen yet.
+This directory is the source of truth for every message and every API shape in the system.
+The normative documents are `schemas/*.json` (JSON Schema 2020-12, embedded into the Go
+services and enforced at the ingest boundary), `openapi.yaml`, and `asyncapi.yaml`. What
+follows is the readable summary of those documents, not a second definition of them: where
+the two disagree, the schemas win.
 
 ## Topics
 

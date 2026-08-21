@@ -26,8 +26,10 @@ to prove that a new UI framework requires no backend change.
 The system works end to end: a simulated fleet publishes over MQTT, ingest validates every
 payload against the schemas in `contracts/` and writes it to TimescaleDB and a durable NATS
 JetStream log, the API projects that log into live fleet state served over REST and a
-coalesced WebSocket channel, and a Blazor dashboard renders a thousand live devices from it.
-The remaining UI frameworks are not built, so there is nothing to compare yet.
+coalesced WebSocket channel, and three .NET dashboards — Blazor, WinUI 3 and WPF — render a
+thousand live devices from it. The XAML pair already answers part of the comparison: they run
+the same ViewModels unchanged and differ only in dialect and dispatcher. Qt, Electron and
+Flutter are not built, so the cross-runtime comparison is still open.
 
 **Legend:** ✅ working · 🚧 in progress · ⬜ not started
 
@@ -44,7 +46,7 @@ The remaining UI frameworks are not built, so there is nothing to compare yet.
 | Event log (NATS JetStream) | ✅ | Durable and replayable; carries the payload verbatim with ingest metadata in headers |
 | Fleet API (REST + WebSocket) | ✅ | Log-driven projection with `(boot_id, seq)` ordering, replay on restart, REST queries, history from continuous aggregates |
 | Snapshot/delta protocol | 🚧 | Snapshot plus coalesced per-device deltas at a client-capped cadence; field-level deltas and per-connection backpressure still to come |
-| Shared .NET client state core | ✅ | Transport, reconnect with jittered backoff, frame reconciliation — consumed directly by Blazor, and by the XAML clients through ViewModels when they land |
+| Shared .NET client state core | ✅ | Transport, reconnect with jittered backoff, frame reconciliation — consumed directly by Blazor, and by the XAML clients through ViewModels |
 | Device agent (C99) | ⬜ | Constrained-device implementation of the same contract |
 
 ### Dashboards
@@ -52,8 +54,8 @@ The remaining UI frameworks are not built, so there is nothing to compare yet.
 | Client | Status | Notes |
 |---|:--:|---|
 | Blazor | ✅ | Virtualized grid over the shared .NET state core, device detail with history and events |
-| WinUI 3 | ⬜ | |
-| WPF | ⬜ | Shares ViewModels with WinUI 3 |
+| WinUI 3 | ✅ | `x:Bind` over the shared ViewModels, `ItemsRepeater` virtualization, device detail with history and events |
+| WPF | ✅ | The same ViewModels unchanged, detail panel included; only the dispatcher and XAML dialect differ |
 | Qt / QML | ⬜ | |
 | Electron | ⬜ | |
 | Flutter | ⬜ | Added last, to show a new framework needs no backend change |
@@ -183,7 +185,9 @@ are treated as data rather than control.
 
 ## Running it
 
-**Requirements:** Docker with Compose. The .NET 10 SDK only for the throwaway viewer.
+**Requirements:** Docker with Compose. The whole backend and the Blazor dashboard run in
+containers; the .NET 10 SDK is needed only to build the WinUI 3 and WPF clients, which are
+Windows desktop applications and are not containerised.
 
 From the repository root:
 
@@ -319,6 +323,7 @@ Tests, including the race detector and the schema conformance checks:
 go test -race ./...
 dotnet test services/api.tests
 dotnet test clients/dotnet/Fleet.Client.Core.Tests
+dotnet test clients/dotnet/Fleet.Client.Xaml.Tests
 ```
 
 Whether the running API still matches its contract:
@@ -370,7 +375,7 @@ engine behind these profiles adds fault injection and lifecycle events.
 | Language | Used for | Why |
 |---|---|---|
 | Go | Device simulator, ingest service | A thousand concurrent MQTT sessions, small image, high-fanout I/O |
-| C# / .NET 10 | API tier, shared client state core, Blazor, WinUI 3, WPF | Typed API surface, and one state core serving two different view-state idioms |
+| C# / .NET 10 | API tier, shared client state core, Blazor, WinUI 3, WPF | Typed API surface, and one state core serving two different view-state idioms — MVVM for the XAML hosts, direct store subscription for Blazor |
 | C99 | Reference device agent | Proves the payload contract works from a genuinely constrained device |
 | C++ / QML | Qt dashboard | Native desktop UI with its own Model/View idiom |
 | TypeScript | Electron dashboard | The web stack, as a desktop application |
@@ -400,8 +405,10 @@ services/
 clients/
   dotnet/
     Fleet.Client.Core/  transport, reconnection, frame reconciliation
+    Fleet.Client.Xaml/  MVVM ViewModels, shared by both XAML hosts
     blazor/             virtualized dashboard
-    winui/  wpf/        XAML clients over the same core        (planned)
+    winui/  wpf/        XAML hosts running those ViewModels unchanged
+    *.Tests/            reconciliation, ViewModel and detail-panel tests
   qt/  electron/  flutter/                                     (planned)
 tools/                  contract_test.py; conformance suite and load orchestration  (partly planned)
 docs/                   architecture and decision records
@@ -412,7 +419,8 @@ docs/                   architecture and decision records
 - [Architecture](docs/architecture.md) — topology, contracts, realtime protocol, security,
   scale targets, build order
 - [Decision records](docs/adr/) — why the system is built this way
-- [.NET clients](clients/dotnet/README.md) — the shared state core, the dashboard, and what makes a thousand rows render
+- [.NET clients](clients/dotnet/README.md) — the shared state core, the three .NET
+  dashboards, where sharing stops, and what makes a thousand rows render
 - Scale testing — measured ceilings and failure modes *(not published yet)*
 - UI comparison — framework results under identical load *(not published yet)*
 

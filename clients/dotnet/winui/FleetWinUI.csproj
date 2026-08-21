@@ -1,0 +1,57 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Written by hand rather than generated.
+
+    The official WinUI templates arrive with a Visual Studio workload, and the community
+    template packs on NuGet are a third-party dependency for something this project needs
+    only once. An unpackaged WinUI 3 application is a short project file, so it is written
+    out and commented instead.
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>FleetWinUI</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <UseWinUI>true</UseWinUI>
+
+    <!--
+      Unpackaged. A packaged build needs an MSIX identity, a certificate and a deployment
+      step, none of which earns its place for a dashboard run from a build output directory.
+    -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <EnableMsixTooling>false</EnableMsixTooling>
+
+    <!--
+      WinUI has no AnyCPU story: the runtime ships per-architecture native components, so a
+      concrete platform and runtime identifier are required rather than optional.
+    -->
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Only the App SDK is referenced. It brings Microsoft.Windows.SDK.BuildTools with it,
+      and pinning that separately produced a downgrade error the moment the App SDK moved
+      ahead of the pinned version. Two references to the same transitive dependency is a
+      conflict waiting to happen, so there is one.
+    -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.4.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The same ViewModels the WPF client uses, referenced unchanged. Nothing in this project
+      subclasses or adapts them; if it did, the reuse claim would be worth less.
+    -->
+    <ProjectReference Include="..\Fleet.Client.Xaml\Fleet.Client.Xaml.csproj" />
+  </ItemGroup>
+
+</Project>

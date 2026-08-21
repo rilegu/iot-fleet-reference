@@ -76,6 +76,33 @@ jobs:
           dotnet test services/api.tests -c Release --logger "console;verbosity=normal"
           dotnet test clients/dotnet/Fleet.Client.Core.Tests -c Release --logger "console;verbosity=normal"
 
+  # WPF and WinUI are Windows-only and need their own runner, which is why they are a
+  # separate job rather than more steps in the .NET one. Only the build is verified: these
+  # are desktop applications with no headless mode, so running them in CI would prove
+  # nothing that compiling them does not.
+  xaml:
+    name: XAML clients
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build the shared ViewModels and their tests
+        run: |
+          dotnet build clients/dotnet/Fleet.Client.Xaml -c Release
+          dotnet test clients/dotnet/Fleet.Client.Xaml.Tests -c Release --logger "console;verbosity=normal"
+
+      # Both hosts build against the same ViewModel assembly. A break here means one of them
+      # has drifted, which is the failure the shared layer exists to prevent.
+      - name: Build WPF
+        run: dotnet build clients/dotnet/wpf -c Release
+
+      - name: Build WinUI
+        run: dotnet build clients/dotnet/winui -c Release
+
   contract:
     name: Contract
     runs-on: ubuntu-latest
