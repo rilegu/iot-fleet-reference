@@ -1,0 +1,201 @@
+# The realtime channel and the device-facing MQTT topics.
+#
+# AsyncAPI describes what OpenAPI cannot: messages that arrive without being requested.
+# The REST surface in openapi.yaml is only half the contract, and describing the WebSocket
+# in prose would leave the half that actually carries the load undocumented.
+#
+# The payload schemas for the MQTT topics are the same files the simulator and ingest
+# validate against, referenced rather than restated so there is one definition of a
+# telemetry message in the repository.
+
+asyncapi: 2.6.0
+
+info:
+  title: Fleet realtime channels
+  version: 1.0.0
+  description: |
+    Two directions, deliberately different in character.
+
+    Devices publish to MQTT. That contract is constrained by what an embedded device can
+    implement: MQTT 3.1.1, small JSON payloads, no framing beyond what the broker provides.
+
+    Dashboards consume a WebSocket. That contract is shaped by the opposite pressure — a
+    thousand devices reporting every second is a thousand messages per second per client,
+    which no UI survives rendering directly. The server therefore projects and coalesces,
+    and clients receive change, not traffic.
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  broker:
+    url: mosquitto:1883
+    protocol: mqtt
+    protocolVersion: "3.1.1"
+    description: Device-facing broker.
+  api:
+    url: fleet-api:8080
+    protocol: ws
+    description: Dashboard-facing realtime channel.
+
+defaultContentType: application/json
+
+channels:
+  fleet/{site}/{deviceId}/telemetry:
+    description: Periodic sensor samples. QoS 0 — a lost sample is acceptable, head-of-line blocking is not.
+    parameters:
+      site: { $ref: "#/components/parameters/site" }
+      deviceId: { $ref: "#/components/parameters/deviceId" }
+    publish:
+      operationId: publishTelemetry
+      message: { $ref: "#/components/messages/Telemetry" }
+
+  fleet/{site}/{deviceId}/status:
+    description: |
+      Presence and identity. QoS 1, retained, and registered as the connection's Last Will.
+
+      Retained so a consumer subscribing later immediately learns the state of every device
+      instead of waiting for the next sample. Backed by a will so a device that dies without
+      disconnecting still goes offline.
+    parameters:
+      site: { $ref: "#/components/parameters/site" }
+      deviceId: { $ref: "#/components/parameters/deviceId" }
+    publish:
+      operationId: publishStatus
+      message: { $ref: "#/components/messages/Status" }
+
+  fleet/{site}/{deviceId}/event:
+    description: Discrete faults and threshold crossings. QoS 1 — losing one loses information telemetry will not repeat.
+    parameters:
+      site: { $ref: "#/components/parameters/site" }
+      deviceId: { $ref: "#/components/parameters/deviceId" }
+    publish:
+      operationId: publishEvent
+      message: { $ref: "#/components/messages/Event" }
+
+  /ws/fleet:
+    description: |
+      Live fleet state for dashboards.
+
+      A client may send one subscribe frame; a client that sends nothing gets server
+      defaults. The server then sends exactly one snapshot, followed by delta frames at a
+      fixed cadence carrying only devices that changed.
+
+      Frames are numbered consecutively from the snapshot. A client comparing the count of
+      frames it applied against the latest frame number can detect a dropped frame, which
+      would otherwise be invisible.
+    servers: [api]
+    publish:
+      operationId: sendSubscribe
+      summary: Client to server
+      message: { $ref: "#/components/messages/Subscribe" }
+    subscribe:
+      operationId: receiveFrames
+      summary: Server to client
+      message:
+        oneOf:
+          - $ref: "#/components/messages/Snapshot"
+          - $ref: "#/components/messages/Delta"
+
+components:
+  parameters:
+    site:
+      description: Site segment of the topic. Broker ACLs and ingest partitioning are scoped by it.
+      schema:
+        type: string
+        pattern: "^[a-z0-9][a-z0-9-]{0,63}$"
+    deviceId:
+      schema:
+        type: string
+        pattern: "^[a-z0-9][a-z0-9-]{0,63}$"
+
+  messages:
+    Telemetry:
+      name: telemetry
+      title: Device telemetry
+      contentType: application/json
+      payload:
+        $ref: "./schemas/telemetry.json"
+
+    Status:
+      name: status
+      title: Device presence and identity
+      contentType: application/json
+      payload:
+        $ref: "./schemas/status.json"
+
+    Event:
+      name: event
+      title: Device event
+      contentType: application/json
+      payload:
+        $ref: "./schemas/event.json"
+
+    Subscribe:
+      name: subscribe
+      title: Subscription request
+      contentType: application/json
+      payload:
+        type: object
+        properties:
+          type:
+            type: string
+            const: subscribe
+          max_rate_hz:
+            type: number
+            minimum: 0
+            maximum: 20
+            description: |
+              Frames per second the client is willing to receive. The server treats this as
+              a ceiling it honours by slowing down, never as a request to speed up: a client
+              cannot make the server do more work by asking for more.
+
+              Values outside the accepted range are ignored in favour of the server default.
+
+    Snapshot:
+      name: snapshot
+      title: Full fleet state
+      contentType: application/json
+      payload:
+        type: object
+        required: [type, frame, cadence_ms, devices, aggregates]
+        properties:
+          type:
+            type: string
+            const: snapshot
+          frame:
+            type: integer
+            description: Always 1 for the first snapshot of a connection.
+          cadence_ms:
+            type: integer
+            description: Interval the server will send deltas at, after honouring max_rate_hz.
+          devices:
+            type: array
+            items:
+              $ref: "./openapi.yaml#/components/schemas/DeviceState"
+          aggregates:
+            $ref: "./openapi.yaml#/components/schemas/FleetAggregates"
+
+    Delta:
+      name: delta
+      title: Changed devices
+      contentType: application/json
+      payload:
+        type: object
+        required: [type, frame, changed, aggregates]
+        properties:
+          type:
+            type: string
+            const: delta
+          frame: { type: integer }
+          changed:
+            type: array
+            description: |
+              Devices that changed since the previous frame, coalesced: a device that
+              changed fifty times within the cadence appears once, carrying its current
+              state. Whole records rather than changed fields — field-level deltas would be
+              smaller and are the obvious next optimisation.
+            items:
+              $ref: "./openapi.yaml#/components/schemas/DeviceState"
+          aggregates:
+            $ref: "./openapi.yaml#/components/schemas/FleetAggregates"

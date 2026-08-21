@@ -1,0 +1,355 @@
+# The API's REST surface.
+#
+# This file is the source of truth, not a description generated from the implementation.
+# Client models are generated from it (see contracts/codegen/), so a change here reaches
+# every client, and a change made only in the server cannot silently diverge from them.
+#
+# OpenAPI 3.0.3 rather than 3.1: 3.1 aligns with the JSON Schema 2020-12 draft used for the
+# device contracts, which would be pleasingly consistent, but generator support for 3.1 is
+# still uneven and a contract nothing can generate from defeats the purpose.
+
+openapi: 3.0.3
+
+info:
+  title: Fleet API
+  version: 1.0.0
+  description: |
+    Queries over current fleet state and telemetry history.
+
+    Current state is served from an in-memory projection of the event log, so those
+    endpoints are cheap and never touch the database. History is served from continuous
+    aggregates rather than raw telemetry: charting a day across the fleet from raw rows
+    would scan everything, while the aggregate is a materialized view kept current
+    incrementally.
+
+    Live updates are not here. They are a WebSocket channel described in asyncapi.yaml,
+    because polling these endpoints for liveness is exactly the pattern the delta protocol
+    exists to replace.
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:8080
+    description: Compose
+
+tags:
+  - name: fleet
+    description: Current state, from the projection
+  - name: history
+    description: Past state, from continuous aggregates
+  - name: health
+    description: Liveness and readiness
+
+paths:
+  /api/fleet:
+    get:
+      tags: [fleet]
+      summary: Current state of the fleet
+      operationId: getFleet
+      parameters:
+        - name: site
+          in: query
+          description: Restrict to one site.
+          schema: { type: string }
+        - name: online
+          in: query
+          description: Restrict to devices that are online, or that are not.
+          schema: { type: boolean }
+        - name: limit
+          in: query
+          description: Maximum devices to return, applied after sorting by device id.
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Matching devices, with fleet-wide aggregates alongside.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FleetResponse" }
+
+  /api/fleet/aggregates:
+    get:
+      tags: [fleet]
+      summary: Fleet-wide counters only
+      description: The same aggregates carried by every realtime frame, for callers that want the headline numbers without the device list.
+      operationId: getFleetAggregates
+      responses:
+        "200":
+          description: Aggregates.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FleetAggregates" }
+
+  /api/devices/{deviceId}:
+    get:
+      tags: [fleet]
+      summary: Current state of one device
+      operationId: getDevice
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: The device.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceState" }
+        "404":
+          description: No device with that id is known to the projection.
+
+  /api/devices/{deviceId}/history:
+    get:
+      tags: [history]
+      summary: Telemetry history for one device
+      description: One-minute buckets from the continuous aggregate. Buckets with no samples are absent rather than zero-filled.
+      operationId: getDeviceHistory
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+        - name: minutes
+          in: query
+          description: Window ending now. Clamped by the server to at most one week.
+          schema: { type: integer, minimum: 1, maximum: 10080, default: 60 }
+      responses:
+        "200":
+          description: Buckets in ascending time order.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TelemetryPoint" }
+
+  /api/history/fleet:
+    get:
+      tags: [history]
+      summary: Fleet-wide telemetry history, grouped by site
+      operationId: getFleetHistory
+      parameters:
+        - name: minutes
+          in: query
+          description: Window ending now. Clamped by the server to at most one week.
+          schema: { type: integer, minimum: 1, maximum: 10080, default: 60 }
+      responses:
+        "200":
+          description: Buckets in descending time order, then by site.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/FleetPoint" }
+
+  /api/events:
+    get:
+      tags: [history]
+      summary: Recent device events
+      operationId: getEvents
+      parameters:
+        - name: device
+          in: query
+          description: Restrict to one device. Omit for the whole fleet.
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+      responses:
+        "200":
+          description: Events, most recent first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DeviceEvent" }
+
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness
+      description: Whether the process is running. Says nothing about whether it can serve a complete fleet.
+      operationId: getHealth
+      responses:
+        "200":
+          description: Alive.
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness
+      description: |
+        Whether the projection has replayed the log far enough to serve a complete fleet.
+
+        Deliberately distinct from liveness: a restarting instance is alive long before it
+        has caught up, and serving a partial fleet would be worse than refusing traffic.
+      operationId: getReady
+      responses:
+        "200":
+          description: Caught up and serving.
+          content:
+            text/plain:
+              schema: { type: string }
+        "503":
+          description: Alive but still replaying.
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /stats:
+    get:
+      tags: [health]
+      summary: Projection counters
+      operationId: getStats
+      responses:
+        "200":
+          description: Counters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectionStats" }
+
+components:
+  parameters:
+    DeviceId:
+      name: deviceId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-z0-9][a-z0-9-]{0,63}$"
+
+  schemas:
+    FleetResponse:
+      type: object
+      required: [aggregates, devices]
+      properties:
+        aggregates: { $ref: "#/components/schemas/FleetAggregates" }
+        devices:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceState" }
+
+    DeviceState:
+      description: |
+        A device as the projection currently holds it.
+
+        Fields that are absent have never been observed rather than being null: a device
+        seen only through telemetry has no firmware version, because only status messages
+        carry one.
+      type: object
+      required: [device_id, site, boot_id, online, seq, gaps, last_seen]
+      properties:
+        device_id: { type: string }
+        site: { type: string }
+        boot_id:
+          type: string
+          description: Changes on every device restart. With seq it forms the ordering key.
+        online:
+          type: boolean
+          description: Derived from status messages and the Last Will, never from telemetry silence.
+        offline_reason:
+          type: string
+          description: Present only when offline. `lwt` means the broker reported it on the device's behalf.
+          enum: [connect, shutdown, lwt]
+        fw_version: { type: string }
+        model: { type: string }
+        seq:
+          type: integer
+          format: int64
+          description: Highest sequence applied for the current boot_id.
+        gaps:
+          type: integer
+          format: int64
+          description: Sequence jumps observed for this device. Non-zero means messages were lost.
+        metrics: { $ref: "#/components/schemas/Metrics" }
+        last_event: { type: string }
+        last_event_severity:
+          type: string
+          enum: [info, warning, critical]
+        last_seen:
+          type: string
+          format: date-time
+          description: Server-side arrival time. Device clocks are never used for ordering or age.
+
+    Metrics:
+      type: object
+      required: [temp_c, humidity_pct, voltage_v, rssi_dbm, uptime_s]
+      properties:
+        temp_c: { type: number, format: double }
+        humidity_pct: { type: number, format: double }
+        voltage_v: { type: number, format: double }
+        rssi_dbm: { type: integer, format: int32 }
+        uptime_s: { type: integer, format: int64 }
+
+    FleetAggregates:
+      description: Precomputed so that every client does not derive the same numbers itself.
+      type: object
+      required: [total, online, offline, alerting, gaps, applied, stale_dropped, sites]
+      properties:
+        total: { type: integer, format: int32 }
+        online: { type: integer, format: int32 }
+        offline: { type: integer, format: int32 }
+        alerting:
+          type: integer
+          format: int32
+          description: Devices whose last event was a warning or critical.
+        gaps: { type: integer, format: int64 }
+        applied:
+          type: integer
+          format: int64
+          description: Messages applied to the projection since the process started.
+        stale_dropped:
+          type: integer
+          format: int64
+          description: Messages rejected as duplicates or reorderings. Non-zero is normal after a redelivery.
+        sites: { type: integer, format: int32 }
+
+    TelemetryPoint:
+      type: object
+      required: [bucket, samples]
+      properties:
+        bucket: { type: string, format: date-time }
+        samples: { type: integer, format: int64 }
+        temp_c_avg: { type: number, format: double, nullable: true }
+        temp_c_max: { type: number, format: double, nullable: true }
+        humidity_pct_avg: { type: number, format: double, nullable: true }
+        voltage_v_avg: { type: number, format: double, nullable: true }
+        voltage_v_min: { type: number, format: double, nullable: true }
+        rssi_dbm_avg: { type: number, format: double, nullable: true }
+
+    FleetPoint:
+      type: object
+      required: [bucket, site, devices_reporting, samples]
+      properties:
+        bucket: { type: string, format: date-time }
+        site: { type: string }
+        devices_reporting: { type: integer, format: int64 }
+        samples: { type: integer, format: int64 }
+        temp_c_avg: { type: number, format: double, nullable: true }
+
+    DeviceEvent:
+      type: object
+      required: [received_at, device_id, site, kind, severity]
+      properties:
+        received_at: { type: string, format: date-time }
+        device_id: { type: string }
+        site: { type: string }
+        kind:
+          type: string
+          enum: [boot, sensor_fault, brownout, threshold_breach, network_degraded, clock_step]
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        detail:
+          type: string
+          description: Human-readable context. Never parsed; anything a consumer must act on has a typed field.
+        metric: { type: string }
+        value: { type: number, format: double, nullable: true }
+
+    ProjectionStats:
+      type: object
+      required: [ready, log_connected, caught_up, devices, applied, stale_dropped, aggregates]
+      properties:
+        ready: { type: boolean }
+        log_connected: { type: boolean }
+        caught_up: { type: boolean }
+        devices: { type: integer, format: int32 }
+        applied: { type: integer, format: int64 }
+        stale_dropped: { type: integer, format: int64 }
+        aggregates: { $ref: "#/components/schemas/FleetAggregates" }

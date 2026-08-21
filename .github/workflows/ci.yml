@@ -1,0 +1,229 @@
+# Continuous integration.
+#
+# Three jobs, ordered by how fast they fail. Unit tests and static checks run in parallel on
+# every push; the integration job builds the whole stack and exercises it, which is slower
+# and only worth doing once the cheap checks are green.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first one's result irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: "true"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Formatting is checked rather than applied: CI that rewrites source is CI that
+      # disagrees with the working tree.
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      # The race detector is the point of running these in CI at all: the simulator and the
+      # ingest queue are concurrent, and a race that reproduces once in a thousand runs will
+      # not be found by anyone running tests by hand.
+      - name: Test
+        run: go test -race ./...
+
+  dotnet:
+    name: .NET
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build
+        run: |
+          for project in services/api clients/dotnet/Fleet.Client.Core clients/dotnet/blazor; do
+            echo "::group::$project"
+            dotnet build "$project" -c Release
+            echo "::endgroup::"
+          done
+
+      - name: Test
+        run: |
+          dotnet test services/api.tests -c Release --logger "console;verbosity=normal"
+          dotnet test clients/dotnet/Fleet.Client.Core.Tests -c Release --logger "console;verbosity=normal"
+
+  contract:
+    name: Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install checkers
+        run: pip install pyyaml jsonschema
+
+      # Both documents are the source of truth for every client. A malformed one would fail
+      # far away from here, in whichever client tried to generate from it.
+      - name: Contract documents parse
+        run: |
+          python - <<'PY'
+          import yaml
+          for path in ("contracts/openapi.yaml", "contracts/asyncapi.yaml"):
+              with open(path, encoding="utf-8") as handle:
+                  yaml.safe_load(handle)
+              print(f"{path}: ok")
+          PY
+
+      # The device schemas are compiled and exercised by the Go tests, but a syntax error
+      # here should fail fast rather than as a confusing runtime error inside a service.
+      - name: Device schemas are valid JSON Schema
+        run: |
+          python - <<'PY'
+          import glob, json
+          from jsonschema import Draft202012Validator
+          for path in sorted(glob.glob("contracts/schemas/*.json")):
+              with open(path, encoding="utf-8") as handle:
+                  Draft202012Validator.check_schema(json.load(handle))
+              print(f"{path}: ok")
+          PY
+
+      # Generation must keep working even though the .NET clients validate instead of
+      # generating: the Electron, Flutter and Qt clients will depend on it, and a
+      # configuration that silently rots is discovered at the worst moment.
+      - name: Generator still runs
+        run: |
+          dotnet tool restore
+          dotnet nswag run contracts/codegen/csharp.nswag
+          test -s contracts/generated/csharp/FleetContract.g.cs
+
+      - name: Generated output is committed and current
+        run: |
+          if ! git diff --exit-code -- contracts/generated; then
+            echo "Generated code differs from the contract."
+            echo "Run: dotnet nswag run contracts/codegen/csharp.nswag"
+            exit 1
+          fi
+
+  integration:
+    name: Integration
+    runs-on: ubuntu-latest
+    needs: [go, dotnet, contract]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install checkers
+        run: pip install pyyaml jsonschema
+
+      - name: Build and start the stack
+        run: docker compose -f deploy/compose.yaml --profile full up -d --build
+
+      # Readiness, not liveness: the API is alive long before it has replayed the log, and
+      # asserting against a partially populated projection would be flaky by construction.
+      - name: Wait for the API to become ready
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/readyz >/dev/null 2>&1; then
+              echo "ready after ${attempt}0s"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "API never became ready"
+          docker compose -f deploy/compose.yaml --profile full ps
+          docker compose -f deploy/compose.yaml logs fleet-api fleet-ingest | tail -60
+          exit 1
+
+      # Devices need to have reported before the fleet is worth asserting on.
+      - name: Let the fleet report
+        run: sleep 20
+
+      - name: Contract conformance against the running API
+        run: python tools/contract_test.py --base-url http://localhost:8080
+
+      # These counters are the pipeline's own account of whether it lost anything. Any of
+      # them above zero means a message was dropped, rejected or left unacknowledged.
+      - name: Pipeline lost nothing
+        run: |
+          stats=$(curl -fsS http://localhost:9101/stats)
+          echo "$stats"
+          python - "$stats" <<'PY'
+          import json, sys
+          stats = json.loads(sys.argv[1])
+          if stats["telemetry_received"] == 0:
+              sys.exit("no telemetry was ingested at all")
+          bad = {k: stats[k] for k in
+                 ("invalid", "telemetry_dropped", "write_failures", "publish_failures", "unacknowledged")
+                 if stats[k] != 0}
+          if bad:
+              sys.exit(f"pipeline reported losses: {bad}")
+          print("clean")
+          PY
+
+      - name: Projection agrees with the fleet
+        run: |
+          stats=$(curl -fsS http://localhost:8080/stats)
+          echo "$stats"
+          python - "$stats" <<'PY'
+          import json, sys
+          stats = json.loads(sys.argv[1])
+          agg = stats["aggregates"]
+          if agg["total"] == 0:
+              sys.exit("the projection is empty")
+          if agg["gaps"]:
+              sys.exit(f"projection detected {agg['gaps']} sequence gaps")
+          print(f"{agg['total']} devices, {agg['online']} online, no gaps")
+          PY
+
+      - name: Dashboard serves its framework script
+        # A missing wwwroot/_framework returns 404 here and nowhere else: the app starts
+        # cleanly, serves prerendered HTML and reports healthy while never becoming
+        # interactive. Only an explicit check catches it.
+        run: |
+          curl -fsS -o /dev/null http://localhost:8090/
+          curl -fsS -o /dev/null http://localhost:8090/_framework/blazor.web.js
+          echo "dashboard and framework assets serve"
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -f deploy/compose.yaml --profile full ps
+          docker compose -f deploy/compose.yaml --profile full logs --tail 100
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f deploy/compose.yaml --profile full down -v

@@ -134,9 +134,9 @@ contracts/
 
 Generated clients, never hand-written models:
 
-| Target | Generator |
+| Target | Approach |
 |---|---|
-| C# | NSwag or Kiota |
+| C# | Hand-written models, checked against the contract by conformance tests. Generation works but carries the wire format's snake_case into C# names; see [`contracts/codegen/`](../contracts/codegen/README.md) |
 | TypeScript | `openapi-typescript` + `zod` from JSON Schema |
 | Go | `oapi-codegen` |
 | Python | `datamodel-code-generator` |
