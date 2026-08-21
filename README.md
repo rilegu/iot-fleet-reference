@@ -26,10 +26,11 @@ to prove that a new UI framework requires no backend change.
 The system works end to end: a simulated fleet publishes over MQTT, ingest validates every
 payload against the schemas in `contracts/` and writes it to TimescaleDB and a durable NATS
 JetStream log, the API projects that log into live fleet state served over REST and a
-coalesced WebSocket channel, and three .NET dashboards — Blazor, WinUI 3 and WPF — render a
-thousand live devices from it. The XAML pair already answers part of the comparison: they run
-the same ViewModels unchanged and differ only in dialect and dispatcher. Qt, Electron and
-Flutter are not built, so the cross-runtime comparison is still open.
+coalesced WebSocket channel, and four dashboards — Blazor, WinUI 3, WPF and Electron — render
+a thousand live devices from it. The comparison has started to pay: the XAML pair run the same
+ViewModels unchanged and differ only in dialect and dispatcher, while the Electron client
+shares no code with them at all and re-implements the reconciler in TypeScript against the
+same tests. Qt and Flutter are not built.
 
 **Legend:** ✅ working · 🚧 in progress · ⬜ not started
 
@@ -57,7 +58,7 @@ Flutter are not built, so the cross-runtime comparison is still open.
 | WinUI 3 | ✅ | `x:Bind` over the shared ViewModels, `ItemsRepeater` virtualization, device detail with history and events |
 | WPF | ✅ | The same ViewModels unchanged, detail panel included; only the dispatcher and XAML dialect differ |
 | Qt / QML | ⬜ | |
-| Electron | ⬜ | |
+| Electron | ✅ | React over an external store, `@tanstack/react-virtual` grid, device detail with history and events; no code shared with the .NET clients, and the same reconciliation tests |
 | Flutter | ⬜ | Added last, to show a new framework needs no backend change |
 
 ### Cross-cutting
@@ -324,6 +325,7 @@ go test -race ./...
 dotnet test services/api.tests
 dotnet test clients/dotnet/Fleet.Client.Core.Tests
 dotnet test clients/dotnet/Fleet.Client.Xaml.Tests
+npm --prefix clients/electron test
 ```
 
 Whether the running API still matches its contract:
@@ -378,7 +380,7 @@ engine behind these profiles adds fault injection and lifecycle events.
 | C# / .NET 10 | API tier, shared client state core, Blazor, WinUI 3, WPF | Typed API surface, and one state core serving two different view-state idioms — MVVM for the XAML hosts, direct store subscription for Blazor |
 | C99 | Reference device agent | Proves the payload contract works from a genuinely constrained device |
 | C++ / QML | Qt dashboard | Native desktop UI with its own Model/View idiom |
-| TypeScript | Electron dashboard | The web stack, as a desktop application |
+| TypeScript | Electron dashboard | The web stack, as a desktop application: React, Vite and Tailwind over its own copy of the reconciler |
 | Python | Conformance suite, load orchestration, analysis | Contract tests that any device implementation must pass |
 
 ## Repository layout
@@ -409,7 +411,8 @@ clients/
     blazor/             virtualized dashboard
     winui/  wpf/        XAML hosts running those ViewModels unchanged
     *.Tests/            reconciliation, ViewModel and detail-panel tests
-  qt/  electron/  flutter/                                     (planned)
+  electron/             TypeScript, React and Vite; its own reconciler, same tests
+  qt/  flutter/                                               (planned)
 tools/                  contract_test.py; conformance suite and load orchestration  (partly planned)
 docs/                   architecture and decision records
 ```
@@ -421,6 +424,8 @@ docs/                   architecture and decision records
 - [Decision records](docs/adr/) — why the system is built this way
 - [.NET clients](clients/dotnet/README.md) — the shared state core, the three .NET
   dashboards, where sharing stops, and what makes a thousand rows render
+- [Electron client](clients/electron/README.md) — the web stack as a desktop app, why its
+  network access lives in the main process, and the startup race that cost a snapshot
 - Scale testing — measured ceilings and failure modes *(not published yet)*
 - UI comparison — framework results under identical load *(not published yet)*
 
