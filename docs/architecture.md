@@ -76,9 +76,9 @@ server tier — runs in Linux containers, which is both closer to how real devic
 backends run and what makes `docker compose up` bring the entire system up in one command.
 See [ADR-0007](adr/0007-linux-containers-windows-dashboards.md).
 
-Two Compose profiles: `full` runs everything and is the demo, CI and measurement topology;
-`infra` omits `fleet-api` so it can run on the Windows host with a debugger attached during
-development.
+`docker compose up` starts everything except `fleet-api`, so the API can run on the Windows
+host with a debugger attached during development. `docker compose --profile full up` adds
+the API container and is the demo, CI and measurement topology.
 
 There is exactly one platform boundary — dashboards to `fleet-api` — and it is identical
 for every client, so it is a constant in the comparison rather than a variable.
@@ -93,7 +93,7 @@ for every client, so it is a constant in the comparison rather than a variable.
 | `timescaledb` | — | Linux container | Telemetry history, continuous aggregates, retention |
 | `nats` | — | Linux container | Normalized internal event bus with replay (JetStream) |
 | `fleet-ingest` | Go 1.26 | Linux container | MQTT consumer, schema validation, normalization, persistence, fan-out |
-| `fleet-api` | C# / .NET 10 | Linux container (or host, `infra` profile) | Fleet state projection, REST + WebSocket, authn/authz, command dispatch |
+| `fleet-api` | C# / .NET 10 | Linux container, or the host during development | Fleet state projection, REST + WebSocket, authn/authz, command dispatch |
 | `Fleet.Client.Core` | C# / .NET 10 | Windows | Transport, reconciliation, observable fleet state core |
 | `clients/*` | varies | Windows | Dashboard implementations |
 | `tools/*` | Python 3.13 | either | Contract conformance suite, load orchestration, comparison analysis |

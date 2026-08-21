@@ -151,3 +151,35 @@ func TestSeedIsReproducible(t *testing.T) {
 		}
 	}
 }
+
+// A boot id identifies a process lifetime, not a device, so it must differ on every start
+// even when the seed is fixed. When it did not, a restarted simulator kept its old boot id
+// while its sequence reset to 1, and consumers discarded the whole new session as stale.
+func TestBootIDIsNotReproducibleFromSeed(t *testing.T) {
+	build := func() string {
+		return NewDevice(1, "site-00", "tcp://localhost:1883", time.Second, 0,
+			rand.New(rand.NewSource(42))).BootID
+	}
+
+	a, b := build(), build()
+	if a == b {
+		t.Fatalf("same seed produced the same boot id %q; a restart would be indistinguishable from a continuation", a)
+	}
+	if len(a) != 16 {
+		t.Errorf("boot id %q is %d chars, want 16 to match the schema pattern", a, len(a))
+	}
+}
+
+// The metric walk must stay reproducible even though the boot id is not.
+func TestSeedStillReproducesSensorWalk(t *testing.T) {
+	build := func() float64 {
+		d := NewDevice(1, "site-00", "tcp://localhost:1883", time.Second, 0, rand.New(rand.NewSource(42)))
+		for i := 0; i < 20; i++ {
+			d.walk()
+		}
+		return d.tempC
+	}
+	if a, b := build(), build(); a != b {
+		t.Fatalf("sensor walk diverged with the same seed: %v vs %v", a, b)
+	}
+}

@@ -67,7 +67,7 @@ func NewDevice(index int, site string, broker string, rate time.Duration, faultP
 		Site:        site,
 		Model:       "acme-sensor-v2",
 		FwVer:       firmwareVersions[rng.Intn(len(firmwareVersions))],
-		BootID:      randomHex(rng, 8),
+		BootID:      newBootID(),
 		broker:      broker,
 		rate:        rate,
 		faultPct:    faultPct,
