@@ -42,6 +42,12 @@ Two decisions carry most of the performance:
   id is stable across frames; sorting by temperature is not. Rebuilding unconditionally
   resets scroll position and selection several times a second.
 
+Every sort also falls back to the device id. `OrderBy` is a stable sort, but stability only
+preserves the order of its input, and the input is a dictionary's values — an order neither
+`Dictionary` nor `ConcurrentDictionary` defines, and one that moves when a device leaves or a
+snapshot replaces the fleet. Without the fallback, rows tied on the sort key could swap places
+for no reason the operator could see.
+
 `Fleet.Client.Core` is consumed unchanged by every .NET client. The WinUI and WPF clients
 wrap it in `CommunityToolkit.Mvvm` ViewModels, because XAML's binding engine is built around
 change notification. Blazor subscribes to it directly and calls `StateHasChanged`, because

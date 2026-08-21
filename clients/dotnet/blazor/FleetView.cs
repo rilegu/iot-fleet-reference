@@ -141,11 +141,23 @@ public sealed class FleetView : IAsyncDisposable
         }
     }
 
+    // Every sort falls back to the device id, which makes the comparison total.
+    //
+    // OrderBy is a stable sort, but stability only preserves the order of the input, and this
+    // input is ConcurrentDictionary.Values — an order the type explicitly does not define,
+    // which changes on internal resize and again on the clear-and-refill that every snapshot
+    // performs. Relying on it meant rows tied on the sort key could reorder after a
+    // reconnect. The XAML clients carry the same fallback for the same reason.
+
     private IOrderedEnumerable<DeviceState> Order<TKey>(IEnumerable<DeviceState> q, Func<DeviceState, TKey> key) =>
-        _descending ? q.OrderByDescending(key) : q.OrderBy(key);
+        _descending
+            ? q.OrderByDescending(key).ThenByDescending(d => d.DeviceId, StringComparer.Ordinal)
+            : q.OrderBy(key).ThenBy(d => d.DeviceId, StringComparer.Ordinal);
 
     private IOrderedEnumerable<DeviceState> Order<TKey>(IEnumerable<DeviceState> q, Func<DeviceState, TKey> key, IComparer<TKey> comparer) =>
-        _descending ? q.OrderByDescending(key, comparer) : q.OrderBy(key, comparer);
+        _descending
+            ? q.OrderByDescending(key, comparer).ThenByDescending(d => d.DeviceId, StringComparer.Ordinal)
+            : q.OrderBy(key, comparer).ThenBy(d => d.DeviceId, StringComparer.Ordinal);
 
     public IReadOnlyList<string> Sites =>
         _store.Snapshot().Select(d => d.Site).Distinct(StringComparer.Ordinal)

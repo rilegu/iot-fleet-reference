@@ -32,7 +32,7 @@ ViewModels unchanged and differ only in dialect and dispatcher, while the Electr
 shares no code with them at all and re-implements the reconciler in TypeScript against the
 same tests. Qt and Flutter are not built.
 
-**Legend:** ✅ working · 🚧 in progress · ⬜ not started
+**Legend:** ✅ working · 🚧 in progress · ⬜ not started · ➖ deliberately not built
 
 ### Fleet and data path
 
@@ -72,7 +72,7 @@ same tests. Qt and Flutter are not built.
 | API authentication, authorization, audit | ⬜ | |
 | Distributed tracing (OpenTelemetry) | ✅ | One trace spans device to dashboard; the device's W3C context travels in the payload because MQTT 3.1.1 has no header for it |
 | Metrics and dashboards | ✅ | Prometheus scrapes the simulator, ingest and API; Grafana and Jaeger under an `observability` profile |
-| Projection checkpoint and replay | ⬜ | |
+| Projection checkpoint table | ➖ | Not built, by decision: the durable consumer's acknowledgement position already is the checkpoint, so a separate table would be a third copy of state to keep current. See [ADR-0008](docs/adr/0008-delivery-semantics-and-projection-recovery.md) |
 | Chaos suite | ✅ | Six scenarios in CI: kill ingest, the log or the API mid-stream, replay the whole log, reboot a device, and load the bounded queue |
 | Device conformance suite (Python) | ⬜ | |
 | Scale testing to 10 000 devices | ⬜ | |
@@ -410,7 +410,7 @@ clients/
     Fleet.Client.Xaml/  MVVM ViewModels, shared by both XAML hosts
     blazor/             virtualized dashboard
     winui/  wpf/        XAML hosts running those ViewModels unchanged
-    *.Tests/            reconciliation, ViewModel and detail-panel tests
+    *.Tests/            reconciliation, view-state and detail-panel tests
   electron/             TypeScript, React and Vite; its own reconciler, same tests
   qt/  flutter/                                               (planned)
 tools/                  contract_test.py; conformance suite and load orchestration  (partly planned)

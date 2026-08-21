@@ -282,13 +282,28 @@ public sealed partial class FleetViewModel : ObservableObject, IAsyncDisposable
         return true;
     }
 
+    // Every sort falls back to the device id, which makes the comparison total.
+    //
+    // OrderBy is a stable sort, but stability only preserves the order of the input, and the
+    // input here is Dictionary.Values — insertion order until the first removal, after which
+    // freed slots are reused by later insertions. So a device leaving the fleet could permute
+    // every row that ties on the sort key. Invisible when sorting by device id, obvious when
+    // sorting by status, where hundreds of rows share a value.
+    //
+    // The tiebreaker follows the sort direction rather than staying ascending, so that the
+    // Electron client, which reverses its whole comparison, agrees row for row.
+
     private IOrderedEnumerable<DeviceViewModel> Order<TKey>(
         IEnumerable<DeviceViewModel> q, Func<DeviceViewModel, TKey> key) =>
-        Descending ? q.OrderByDescending(key) : q.OrderBy(key);
+        Descending
+            ? q.OrderByDescending(key).ThenByDescending(d => d.DeviceId, StringComparer.Ordinal)
+            : q.OrderBy(key).ThenBy(d => d.DeviceId, StringComparer.Ordinal);
 
     private IOrderedEnumerable<DeviceViewModel> Order<TKey>(
         IEnumerable<DeviceViewModel> q, Func<DeviceViewModel, TKey> key, IComparer<TKey> comparer) =>
-        Descending ? q.OrderByDescending(key, comparer) : q.OrderBy(key, comparer);
+        Descending
+            ? q.OrderByDescending(key, comparer).ThenByDescending(d => d.DeviceId, StringComparer.Ordinal)
+            : q.OrderBy(key, comparer).ThenBy(d => d.DeviceId, StringComparer.Ordinal);
 
     public async ValueTask DisposeAsync()
     {

@@ -213,4 +213,64 @@ public class FleetViewModelTests
         Assert.True(device.IsAlerting);
         Assert.Contains(nameof(DeviceViewModel.IsAlerting), raised);
     }
+
+    // ---- sort determinism ------------------------------------------------------------
+    //
+    // Sorting used to lean on OrderBy being a stable sort. It is, but stability only
+    // preserves the order of the input, and the input is Dictionary.Values, whose order is
+    // not defined and does change. On a column where many devices share a value that let
+    // rows swap places for no reason the operator could see.
+
+    /// <summary>
+    /// Every device here has the same sequence number, so the sort key decides nothing and
+    /// the fallback decides everything. They are fed in reverse, which is the order the
+    /// dictionary then iterates.
+    /// </summary>
+    [Fact]
+    public void TiedSortKeysResolveByDeviceId()
+    {
+        var (vm, store) = Build();
+        store.ApplySnapshot(new[] { State("dev-c"), State("dev-b"), State("dev-a") }, null, 250, 1);
+
+        vm.Sort = DeviceSort.Sequence;
+
+        Assert.Equal(new[] { "dev-a", "dev-b", "dev-c" }, vm.Devices.Select(d => d.DeviceId));
+    }
+
+    /// <summary>
+    /// Descending reverses the fallback too, so the Electron client — which reverses its
+    /// whole comparison rather than just the primary key — agrees row for row.
+    /// </summary>
+    [Fact]
+    public void TiedSortKeysReverseWithTheSortDirection()
+    {
+        var (vm, store) = Build();
+        store.ApplySnapshot(new[] { State("dev-a"), State("dev-b"), State("dev-c") }, null, 250, 1);
+
+        vm.Sort = DeviceSort.Sequence;
+        vm.Descending = true;
+
+        Assert.Equal(new[] { "dev-c", "dev-b", "dev-a" }, vm.Devices.Select(d => d.DeviceId));
+    }
+
+    /// <summary>
+    /// The condition that actually triggered this in a running fleet.
+    ///
+    /// A device leaving frees its slot in the dictionary, and the next device to arrive
+    /// reuses it — so iteration order stops matching insertion order, and every row tied on
+    /// the sort key can move.
+    /// </summary>
+    [Fact]
+    public void TiedOrderSurvivesADeviceLeavingAndAnotherJoining()
+    {
+        var (vm, store) = Build();
+        store.ApplySnapshot(new[] { State("dev-a"), State("dev-b"), State("dev-c") }, null, 250, 1);
+
+        store.ApplySnapshot(new[] { State("dev-a"), State("dev-c") }, null, 250, 2);
+        store.ApplyDelta(new[] { State("dev-d") }, null, 3);
+
+        vm.Sort = DeviceSort.Status;
+
+        Assert.Equal(new[] { "dev-a", "dev-c", "dev-d" }, vm.Devices.Select(d => d.DeviceId));
+    }
 }

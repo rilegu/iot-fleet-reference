@@ -75,6 +75,7 @@ jobs:
         run: |
           dotnet test services/api.tests -c Release --logger "console;verbosity=normal"
           dotnet test clients/dotnet/Fleet.Client.Core.Tests -c Release --logger "console;verbosity=normal"
+          dotnet test clients/dotnet/Fleet.Dashboard.Tests -c Release --logger "console;verbosity=normal"
 
   # WPF and WinUI are Windows-only and need their own runner, which is why they are a
   # separate job rather than more steps in the .NET one. Only the build is verified: these
