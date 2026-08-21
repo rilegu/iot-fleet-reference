@@ -63,7 +63,8 @@ The remaining UI frameworks are not built, so there is nothing to compare yet.
 | Concern | Status | Notes |
 |---|:--:|---|
 | Projection replay on restart | ✅ | Durable log consumer; readiness withheld until the backlog is drained |
-| Contract codegen + CI drift check | ⬜ | |
+| API contract (OpenAPI + AsyncAPI) | ✅ | `contracts/openapi.yaml` and `contracts/asyncapi.yaml`; the realtime frames reference the same definitions as the REST responses |
+| Contract conformance + CI | ✅ | CI builds everything, runs every test under the race detector, brings up the stack and validates the running API against the contract |
 | TLS, per-device identity, broker ACLs | ⬜ | |
 | API authentication, authorization, audit | ⬜ | |
 | Distributed tracing (OpenTelemetry) | ⬜ | Built before the ingest split, not after |
@@ -296,7 +297,19 @@ Tests, including the race detector and the schema conformance checks:
 
 ```bash
 go test -race ./...
+dotnet test services/api.tests
+dotnet test clients/dotnet/Fleet.Client.Core.Tests
 ```
+
+Whether the running API still matches its contract:
+
+```bash
+pip install pyyaml jsonschema
+python tools/contract_test.py --base-url http://localhost:8080
+```
+
+All of the above runs in CI on every push, along with a full stack build that asserts the
+pipeline lost nothing and the projection detected no gaps.
 
 ### Planned interface
 
@@ -335,8 +348,12 @@ engine behind these profiles adds fault injection and lifecycle events.
 Directories marked *planned* do not exist yet — see [Status](#status).
 
 ```
-contracts/              JSON Schema for every device message, plus a Go validator
-  schemas/              the schemas themselves, embedded into every Go service
+contracts/              the source of truth every tier is generated from or checked against
+  openapi.yaml          the API's REST surface
+  asyncapi.yaml         the realtime channel and the device-facing MQTT topics
+  schemas/              JSON Schema per device message, embedded into every Go service
+  codegen/              generator configuration, and why C# validates instead
+  generated/            generated client models
   vectors/              golden reconciliation vectors, run by every client   (planned)
 deploy/                 compose file, mosquitto config, database schema
 devices/
@@ -353,7 +370,7 @@ clients/
     blazor/             virtualized dashboard
     winui/  wpf/        XAML clients over the same core        (planned)
   qt/  electron/  flutter/                                     (planned)
-tools/                  Python: conformance suite, load orchestration        (planned)
+tools/                  contract_test.py; conformance suite and load orchestration  (partly planned)
 docs/                   architecture and decision records
 ```
 

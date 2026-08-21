@@ -1,0 +1,43 @@
+{
+  "runtime": "Net100",
+  "documentGenerator": {
+    "fromDocument": {
+      "url": "../openapi.yaml"
+    }
+  },
+  "codeGenerators": {
+    "openApiToCSharpClient": {
+      "output": "../generated/csharp/FleetContract.g.cs",
+      "namespace": "Fleet.Contract",
+      "className": "FleetApiClient",
+
+      "//": "Types only. The hand-written FleetConnection owns transport because it also",
+      "//1": "manages the WebSocket, reconnection and frame reconciliation, none of which a",
+      "//2": "REST client generator produces. Generating a second HTTP client alongside it",
+      "//3": "would give two ways to call the same API and no reason to prefer either.",
+      "generateClientClasses": false,
+      "generateClientInterfaces": false,
+      "generateDtoTypes": true,
+
+      "//4": "Records, so a frame handler cannot mutate a device another thread is reading.",
+      "classStyle": "Record",
+      "generateImmutableArrayProperties": false,
+      "generateOptionalPropertiesAsNullable": true,
+      "generateNullableReferenceTypes": true,
+
+      "//5": "System.Text.Json to match the rest of the codebase; Newtonsoft would pull a",
+      "//6": "second serializer into every client for no benefit.",
+      "jsonLibrary": "SystemTextJson",
+      "generateJsonMethods": false,
+      "generateDataAnnotations": false,
+
+      "//7": "The wire uses snake_case. Without this the generated names would be the wire",
+      "//8": "names verbatim, which reads badly in C#.",
+      "propertyNameGeneration": "Default",
+
+      "generateDefaultValues": true,
+      "requiredPropertiesMustBeDefined": true,
+      "generateNativeRecords": true
+    }
+  }
+}
