@@ -46,6 +46,9 @@ type Device struct {
 	// (boot_id, seq) instead.
 	clockSkew float64
 
+	// metrics is optional: tests construct devices directly and have no registry.
+	metrics *SimMetrics
+
 	// sensor state, walked rather than randomised per sample so the dashboard shows
 	// something that looks like a physical process
 	tempC       float64
@@ -148,7 +151,16 @@ func (d *Device) Run(ctx context.Context) error {
 	// a flap. Doing this in the handler rather than once after Connect is what makes a
 	// device recover its retained status without restarting the process.
 	opts.SetOnConnectHandler(func(c mqtt.Client) {
+		if d.metrics != nil {
+			d.metrics.Connected.Inc()
+		}
 		d.publishStatus(c, true, ReasonConnect)
+	})
+
+	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
+		if d.metrics != nil {
+			d.metrics.Connected.Dec()
+		}
 	})
 
 	d.client = mqtt.NewClient(opts)
@@ -262,7 +274,26 @@ func (d *Device) maybeInjectFault() {
 	token := d.client.Publish(topicEvent(d.Site, d.ID), 1, false, payload)
 	if !token.WaitTimeout(5 * time.Second) {
 		slog.Warn("event publish timed out", "device", d.ID, "kind", f.Kind)
+		d.count(SchemaEvent, KindEvent, true)
+		return
 	}
+	d.count(SchemaEvent, KindEvent, false)
+	if d.metrics != nil {
+		d.metrics.Faults.WithLabelValues(f.Kind).Inc()
+	}
+}
+
+// count records a publish. Nil-safe because tests build devices without a registry, and
+// instrumentation should never be the reason a unit test needs extra scaffolding.
+func (d *Device) count(_ string, kind string, failed bool) {
+	if d.metrics == nil {
+		return
+	}
+	if failed {
+		d.metrics.PublishErrors.WithLabelValues(kind).Inc()
+		return
+	}
+	d.metrics.Published.WithLabelValues(kind).Inc()
 }
 
 func (d *Device) publishTelemetry() {
@@ -278,6 +309,7 @@ func (d *Device) publishTelemetry() {
 	// QoS 0: telemetry is a sample of a continuous signal. A dropped sample is
 	// acceptable; head-of-line blocking is not.
 	d.client.Publish(topicTelemetry(d.Site, d.ID), 0, false, payload)
+	d.count(SchemaTelemetry, KindTelemetry, false)
 }
 
 func (d *Device) publishStatus(c mqtt.Client, online bool, reason string) {
@@ -293,7 +325,10 @@ func (d *Device) publishStatus(c mqtt.Client, online bool, reason string) {
 	token := c.Publish(topicStatus(d.Site, d.ID), 1, true, payload)
 	if !token.WaitTimeout(5 * time.Second) {
 		slog.Warn("status publish timed out", "device", d.ID)
+		d.count(SchemaStatus, KindStatus, true)
+		return
 	}
+	d.count(SchemaStatus, KindStatus, false)
 }
 
 func (d *Device) shutdown() {

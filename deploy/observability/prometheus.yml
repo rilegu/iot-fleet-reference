@@ -1,0 +1,42 @@
+# Scrape configuration.
+#
+# Every service exposes /metrics on the port it already serves health on, so there is no
+# separate metrics port to remember or expose.
+
+global:
+  # Faster than the usual minute. The delta cadence is 250ms and faults are injected every
+  # few seconds, so a minute-long interval would smooth away exactly what these metrics
+  # exist to show.
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  - job_name: fleet-ingest
+    static_configs:
+      - targets: ["fleet-ingest:9101"]
+        labels:
+          component: ingest
+
+  - job_name: fleet-api
+    static_configs:
+      - targets: ["fleet-api:8080"]
+        labels:
+          component: api
+
+  - job_name: fleet-sim
+    static_configs:
+      - targets: ["fleet-sim:9102"]
+        labels:
+          component: simulator
+
+  # The collector reports on itself: dropped spans and refused batches show up here, which
+  # is how you tell "no traces" apart from "traces arrived and were discarded".
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8888"]
+        labels:
+          component: collector
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

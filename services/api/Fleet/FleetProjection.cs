@@ -66,13 +66,18 @@ public sealed class FleetProjection
                 if (!ShouldApply(current, msg.BootId, msg.Seq, out var gapped))
                 {
                     Interlocked.Increment(ref _staleDropped);
+                    FleetTelemetry.StaleDropped.Add(1, new KeyValuePair<string, object?>("kind", "telemetry"));
                     return current;
                 }
 
                 // The first live message after a retained baseline is not a gap: the
                 // baseline came from the broker's replay, not the device's previous send.
                 if (current.Provisional) gapped = false;
-                if (gapped) Interlocked.Increment(ref _gaps);
+                if (gapped)
+                {
+                    Interlocked.Increment(ref _gaps);
+                    FleetTelemetry.Gaps.Add(1, new KeyValuePair<string, object?>("site", msg.Site));
+                }
 
                 return current with
                 {
@@ -131,6 +136,7 @@ public sealed class FleetProjection
                 if (!isWill && !ShouldApply(current, msg.BootId, msg.Seq, out _))
                 {
                     Interlocked.Increment(ref _staleDropped);
+                    FleetTelemetry.StaleDropped.Add(1, new KeyValuePair<string, object?>("kind", "status"));
                     return current;
                 }
 
@@ -172,6 +178,7 @@ public sealed class FleetProjection
                 if (!ShouldApply(current, msg.BootId, msg.Seq, out _))
                 {
                     Interlocked.Increment(ref _staleDropped);
+                    FleetTelemetry.StaleDropped.Add(1, new KeyValuePair<string, object?>("kind", "event"));
                     return current;
                 }
                 return current with

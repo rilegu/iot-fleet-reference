@@ -3,7 +3,20 @@ package main
 import (
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+// newTestIngest builds the struct the way the service does, minus the external
+// dependencies. A fresh registry per test keeps counters isolated: a shared one would make
+// assertions depend on which tests ran before.
+func newTestIngest(queueSize int) *Ingest {
+	return &Ingest{
+		telemetryQ: make(chan Message, queueSize),
+		counters:   &Counters{},
+		metrics:    NewIngestMetrics(prometheus.NewRegistry()),
+	}
+}
 
 func TestTopicParts(t *testing.T) {
 	ok := map[string][3]string{
@@ -74,10 +87,7 @@ func TestDecodeEnvelope(t *testing.T) {
 // a drop that nothing records.
 func TestTelemetryQueueDropsOldestAndCounts(t *testing.T) {
 	const size = 8
-	in := &Ingest{
-		telemetryQ: make(chan Message, size),
-		counters:   &Counters{},
-	}
+	in := newTestIngest(size)
 
 	// Fill to capacity: nothing should be dropped yet.
 	for i := 0; i < size; i++ {
@@ -111,7 +121,7 @@ func TestTelemetryQueueDropsOldestAndCounts(t *testing.T) {
 }
 
 func TestHealthyReportsDisconnected(t *testing.T) {
-	in := &Ingest{counters: &Counters{}}
+	in := newTestIngest(1)
 	if err := in.Healthy(); err == nil {
 		t.Error("a service with no broker client must not report healthy")
 	}

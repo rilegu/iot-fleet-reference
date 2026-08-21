@@ -1,0 +1,56 @@
+# Collector configuration.
+#
+# The services export to the collector rather than to a backend directly. That indirection
+# is the point: swapping Jaeger for anything else becomes a change to this file rather than
+# a redeploy of every service, and a backend being down is absorbed here instead of
+# propagating back into the pipeline.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Bounded, and configured to refuse rather than grow. An unbounded queue in a telemetry
+  # collector is how an observability stack turns a small incident into an out-of-memory
+  # kill on the host it was meant to be observing.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # Visible in `docker compose logs otel-collector`, which is the fastest way to tell
+  # whether spans are arriving at all when a trace fails to show up in the UI.
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      # memory_limiter first: it can only protect the pipeline if it runs before anything
+      # accumulates behind it.
+      processors: [memory_limiter, batch]
+      exporters: [otlp/jaeger, debug]
+
+  telemetry:
+    logs:
+      level: warn
+    metrics:
+      # Bind to all interfaces, not the default loopback. Prometheus scrapes this from
+      # another container, and a collector that cannot report its own dropped spans turns
+      # "no traces appeared" into an unanswerable question.
+      address: 0.0.0.0:8888

@@ -10,6 +10,10 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rilegu/iot-fleet-reference/contracts"
+	"github.com/rilegu/iot-fleet-reference/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Counters are exported over HTTP. Every drop is counted: silent loss is the failure that
@@ -47,6 +51,8 @@ type Ingest struct {
 	telemetryQ chan Message
 
 	counters *Counters
+	metrics  *IngestMetrics
+	tracer   trace.Tracer
 	client   mqtt.Client
 }
 
@@ -56,7 +62,7 @@ const (
 	batchInterval      = 250 * time.Millisecond
 )
 
-func NewIngest(broker string, sites []string, v *contracts.Validator, store *Store, bus *Bus, log *slog.Logger) *Ingest {
+func NewIngest(broker string, sites []string, v *contracts.Validator, store *Store, bus *Bus, m *IngestMetrics, log *slog.Logger) *Ingest {
 	return &Ingest{
 		broker:     broker,
 		sites:      sites,
@@ -66,6 +72,8 @@ func NewIngest(broker string, sites []string, v *contracts.Validator, store *Sto
 		log:        log,
 		telemetryQ: make(chan Message, telemetryQueueSize),
 		counters:   &Counters{},
+		metrics:    m,
+		tracer:     telemetry.Tracer("fleet-ingest"),
 	}
 }
 
@@ -173,6 +181,20 @@ func (in *Ingest) handle(_ mqtt.Client, msg mqtt.Message) {
 		Retained:   msg.Retained(),
 	}
 
+	in.metrics.Received.WithLabelValues(kind).Inc()
+
+	// Continue the trace the device started rather than beginning a new one. The device
+	// put W3C context in the payload because MQTT 3.1.1 has no header to carry it, and
+	// lifting it out here is what makes one trace span device to dashboard.
+	ctx := telemetry.ContextFromTraceparent(context.Background(), env.Traceparent)
+	ctx, span := in.tracer.Start(ctx, "ingest "+kind, trace.WithSpanKind(trace.SpanKindConsumer))
+	span.SetAttributes(telemetry.DeviceAttrs(env.DeviceID, env.Site, kind)...)
+	span.SetAttributes(
+		attribute.Int64("fleet.seq", env.Seq),
+		attribute.Bool("fleet.retained", m.Retained),
+	)
+	defer span.End()
+
 	switch kind {
 	case KindTelemetry:
 		in.counters.TelemetryReceived.Add(1)
@@ -181,34 +203,49 @@ func (in *Ingest) handle(_ mqtt.Client, msg mqtt.Message) {
 		msg.Ack()
 	case KindStatus:
 		in.counters.StatusReceived.Add(1)
-		in.handleDurable(msg, m, in.store.WriteStatus)
+		in.handleDurable(ctx, span, msg, m, in.store.WriteStatus)
 	case KindEvent:
 		in.counters.EventReceived.Add(1)
-		in.handleDurable(msg, m, in.store.WriteEvent)
+		in.handleDurable(ctx, span, msg, m, in.store.WriteEvent)
 	}
 }
 
 // handleDurable writes to the database, then to the log, and only then acknowledges the
 // broker. Leaving a message unacknowledged is the whole point: the broker redelivers it,
 // and both writes are idempotent, so redelivery is safe and losing it is not.
-func (in *Ingest) handleDurable(raw mqtt.Message, m Message, write func(context.Context, Message) error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (in *Ingest) handleDurable(parent context.Context, span trace.Span, raw mqtt.Message, m Message, write func(context.Context, Message) error) {
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 
+	started := time.Now()
 	if err := write(ctx, m); err != nil {
 		in.counters.WriteFailures.Add(1)
 		in.counters.Unacknowledged.Add(1)
+		in.metrics.WriteFailures.WithLabelValues(m.Kind).Inc()
+		in.metrics.Unacknowledged.Inc()
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "write failed")
 		in.log.Error("write failed, leaving unacknowledged for redelivery",
 			"kind", m.Kind, "device", m.Envelope.DeviceID, "err", err)
 		return
 	}
+	in.metrics.WriteDuration.WithLabelValues(m.Kind).Observe(time.Since(started).Seconds())
+
+	publishStarted := time.Now()
 	if err := in.bus.Publish(ctx, m); err != nil {
 		in.counters.PublishFailures.Add(1)
 		in.counters.Unacknowledged.Add(1)
+		in.metrics.PublishFailures.Inc()
+		in.metrics.Unacknowledged.Inc()
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish failed")
 		in.log.Error("publish failed, leaving unacknowledged for redelivery",
 			"kind", m.Kind, "device", m.Envelope.DeviceID, "err", err)
 		return
 	}
+	in.metrics.PublishDuration.Observe(time.Since(publishStarted).Seconds())
+	in.metrics.IngestLag.Observe(time.Since(m.ReceivedAt).Seconds())
+
 	raw.Ack()
 }
 
@@ -218,22 +255,28 @@ func (in *Ingest) enqueueTelemetry(m Message) {
 	select {
 	case in.telemetryQ <- m:
 		in.counters.QueueDepth.Store(int64(len(in.telemetryQ)))
+		in.metrics.QueueDepth.Set(float64(len(in.telemetryQ)))
 	default:
 		select {
 		case <-in.telemetryQ:
 			in.counters.TelemetryDropped.Add(1)
+			in.metrics.Dropped.Inc()
 		default:
 		}
 		select {
 		case in.telemetryQ <- m:
 		default:
 			in.counters.TelemetryDropped.Add(1)
+			in.metrics.Dropped.Inc()
 		}
 	}
 }
 
 func (in *Ingest) reject(msg mqtt.Message, reason string) {
 	in.counters.Invalid.Add(1)
+	// Label by category, never by the full validation message: a per-message label would
+	// give the metric unbounded cardinality and eventually take the scrape target down.
+	in.metrics.Invalid.WithLabelValues(reasonCategory(reason)).Inc()
 	// Acknowledge it. A malformed payload will still be malformed on redelivery, so
 	// withholding the acknowledgement would loop it forever; the dead-letter record is
 	// what preserves it for inspection.
@@ -266,16 +309,22 @@ func (in *Ingest) runBatchWorker(ctx context.Context) {
 		writeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
+		started := time.Now()
 		if err := in.store.WriteTelemetryBatch(writeCtx, batch); err != nil {
 			in.counters.WriteFailures.Add(1)
+			in.metrics.WriteFailures.WithLabelValues(KindTelemetry).Inc()
 			in.log.Error("telemetry batch write failed", "size", len(batch), "err", err)
 		} else if err := in.bus.PublishBatch(writeCtx, batch); err != nil {
 			in.counters.PublishFailures.Add(1)
+			in.metrics.PublishFailures.Inc()
 			in.log.Error("telemetry batch publish failed", "size", len(batch), "err", err)
 		} else {
 			in.counters.BatchesWritten.Add(1)
+			in.metrics.WriteDuration.WithLabelValues(KindTelemetry).Observe(time.Since(started).Seconds())
+			in.metrics.IngestLag.Observe(time.Since(batch[0].ReceivedAt).Seconds())
 		}
 		batch = batch[:0]
+		in.metrics.QueueDepth.Set(float64(len(in.telemetryQ)))
 	}
 
 	for {

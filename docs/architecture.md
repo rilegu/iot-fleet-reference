@@ -324,8 +324,13 @@ Not deferred to "later" — it is a stated goal, and it is what separates this f
 
 ## 11. Observability and operations
 
-- OpenTelemetry traces and metrics from `fleet-ingest` and `fleet-api`; Prometheus +
-  Grafana available under an `observability` compose profile.
+- OpenTelemetry traces from `fleet-ingest` and `fleet-api`, and Prometheus metrics from
+  those plus the simulator. Jaeger, Prometheus and Grafana run under an `observability`
+  compose profile, off by default.
+- Trace context is propagated from the device: W3C `traceparent` travels inside the message
+  payload, since MQTT 3.1.1 has no user properties, and is lifted back out at the ingest
+  boundary. Ingest then injects its *own* span context onto the internal log, so the API's
+  span is a child of ingest's rather than a sibling sharing only a trace id.
 - Structured logging with correlation IDs propagated from `cmdId` through to device ack.
 - Health and readiness endpoints on both services.
 - Golden-signal dashboards for the pipeline itself: ingest lag, validation failure rate,

@@ -4,6 +4,9 @@ using System.Text.Json.Serialization;
 using FleetApi.Fleet;
 using FleetApi.Realtime;
 using Npgsql;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -24,9 +27,48 @@ var databaseUrl = builder.Configuration["Database:Url"]
 builder.Services.AddSingleton(_ => NpgsqlDataSource.Create(databaseUrl));
 builder.Services.AddSingleton<HistoryStore>();
 
+// Tracing and metrics.
+//
+// Both are configured unconditionally, but the OTLP exporter is only added when a collector
+// endpoint is configured. A missing collector must not stop the API serving: observability
+// failing is not an outage of the thing being observed.
+var otlpEndpoint = builder.Configuration["Otel:Endpoint"];
+
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService(FleetTelemetry.ServiceName))
+    .WithTracing(tracing =>
+    {
+        tracing
+            .AddSource(FleetTelemetry.ServiceName)
+            .AddAspNetCoreInstrumentation(options =>
+            {
+                // Health probes run every few seconds forever and would otherwise dominate
+                // every trace view while saying nothing.
+                options.Filter = context =>
+                    !context.Request.Path.StartsWithSegments("/healthz") &&
+                    !context.Request.Path.StartsWithSegments("/readyz") &&
+                    !context.Request.Path.StartsWithSegments("/metrics");
+            });
+
+        if (!string.IsNullOrWhiteSpace(otlpEndpoint))
+            tracing.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
+    })
+    .WithMetrics(metrics =>
+    {
+        metrics
+            .AddMeter(FleetTelemetry.ServiceName)
+            .AddAspNetCoreInstrumentation()
+            .AddRuntimeInstrumentation()
+            // Prometheus scrapes rather than being pushed to, so this needs no endpoint
+            // configuration and works even when no collector exists.
+            .AddPrometheusExporter();
+    });
+
 var app = builder.Build();
 
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
+
+app.MapPrometheusScrapingEndpoint();
 
 // ---------------------------------------------------------------------------------------
 // Health

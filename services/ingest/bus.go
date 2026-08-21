@@ -8,6 +8,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/rilegu/iot-fleet-reference/telemetry"
 )
 
 // StreamName is the durable log the API consumes to build its projection.
@@ -64,7 +65,14 @@ func (b *Bus) Close() { b.nc.Close() }
 
 // newMsg builds the NATS message for a fleet message. Both publish paths go through it, so
 // a header added here cannot be forgotten on one of them.
-func newMsg(m Message) *nats.Msg {
+//
+// The trace context written here is the *current* span's, not the device's raw header.
+// Forwarding the device value verbatim would put the API's span in the same trace but as a
+// sibling of ingest's rather than a child, so the timeline would show two unrelated spans
+// instead of the handoff between them. Where there is no active span — batched telemetry,
+// which is queued rather than handled inline — it falls back to the device's own value so
+// the trace still reaches back to the source.
+func newMsg(ctx context.Context, m Message) *nats.Msg {
 	msg := &nats.Msg{
 		Subject: m.Subject(),
 		Data:    m.Payload,
@@ -82,7 +90,9 @@ func newMsg(m Message) *nats.Msg {
 		// message rather than being inferred later.
 		msg.Header.Set("Fleet-Retained", "true")
 	}
-	if m.Envelope.Traceparent != "" {
+	if tp := telemetry.TraceparentFromContext(ctx); tp != "" {
+		msg.Header.Set("traceparent", tp)
+	} else if m.Envelope.Traceparent != "" {
 		msg.Header.Set("traceparent", m.Envelope.Traceparent)
 	}
 	return msg
@@ -93,7 +103,7 @@ func newMsg(m Message) *nats.Msg {
 // Waiting matters: ingest must not acknowledge the broker until the log has the message,
 // or a crash in this window loses it with no way to notice.
 func (b *Bus) Publish(ctx context.Context, m Message) error {
-	if _, err := b.js.PublishMsg(ctx, newMsg(m)); err != nil {
+	if _, err := b.js.PublishMsg(ctx, newMsg(ctx, m)); err != nil {
 		return fmt.Errorf("publishing %s: %w", m.Subject(), err)
 	}
 	return nil
@@ -104,7 +114,7 @@ func (b *Bus) Publish(ctx context.Context, m Message) error {
 func (b *Bus) PublishBatch(ctx context.Context, msgs []Message) error {
 	futures := make([]jetstream.PubAckFuture, 0, len(msgs))
 	for _, m := range msgs {
-		f, err := b.js.PublishMsgAsync(newMsg(m))
+		f, err := b.js.PublishMsgAsync(newMsg(ctx, m))
 		if err != nil {
 			return fmt.Errorf("queueing %s: %w", m.Subject(), err)
 		}

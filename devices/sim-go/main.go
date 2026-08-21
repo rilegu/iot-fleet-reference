@@ -23,6 +23,7 @@ import (
 )
 
 type config struct {
+	metricsAddr  string
 	profile      string
 	broker       string
 	devices      int
@@ -57,12 +58,26 @@ func main() {
 	// need a mutex on a hot path and would make runs non-reproducible.
 	seeder := rand.New(rand.NewSource(cfg.seed))
 
+	// A fleet that is not publishing looks identical to a broker that is not receiving,
+	// until both sides can be seen at once.
+	registry := NewRegistry()
+	metrics := NewSimMetrics(registry)
+	metricsSrv := serveMetrics(cfg.metricsAddr, registry, log)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = metricsSrv.Shutdown(shutdownCtx)
+	}()
+
 	fleet := make([]*Device, 0, cfg.devices)
 	for i := 0; i < cfg.devices; i++ {
 		site := fmt.Sprintf("site-%02d", i%cfg.sites)
 		rng := rand.New(rand.NewSource(seeder.Int63()))
-		fleet = append(fleet, NewDevice(i, site, cfg.broker, cfg.rate, cfg.faultPct, rng))
+		d := NewDevice(i, site, cfg.broker, cfg.rate, cfg.faultPct, rng)
+		d.metrics = metrics
+		fleet = append(fleet, d)
 	}
+	metrics.Devices.Set(float64(len(fleet)))
 
 	var wg sync.WaitGroup
 	for _, d := range fleet {
@@ -127,6 +142,9 @@ func runFlapper(ctx context.Context, fleet []*Device, cfg config, rng *rand.Rand
 			for i := 0; i < n; i++ {
 				d := fleet[rng.Intn(len(fleet))]
 				d.Flap()
+				if d.metrics != nil {
+					d.metrics.Flaps.Inc()
+				}
 				log.Info("flapped device", "device", d.ID)
 			}
 		}
@@ -160,6 +178,7 @@ func parseConfig() config {
 	cfg := config{profile: p.Name}
 	flag.StringVar(&cfg.profile, "profile", p.Name, "fleet profile: "+strings.Join(ProfileNames(), ", "))
 	flag.StringVar(&cfg.broker, "broker", envStr("SIM_BROKER", "tcp://localhost:1883"), "broker URL")
+	flag.StringVar(&cfg.metricsAddr, "metrics-addr", envStr("SIM_METRICS_ADDR", ":9102"), "address for the metrics endpoint")
 	flag.IntVar(&cfg.devices, "devices", envInt("SIM_DEVICES", p.Devices), "number of simulated devices")
 	flag.IntVar(&cfg.sites, "sites", envInt("SIM_SITES", p.Sites), "number of sites to spread devices across")
 	flag.DurationVar(&cfg.rate, "rate", envDur("SIM_RATE", p.Rate), "telemetry interval per device")

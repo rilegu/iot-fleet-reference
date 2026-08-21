@@ -44,6 +44,13 @@ const (
 	SchemaEvent     = "event/1"
 )
 
+// Message kinds, used as metric labels and matching the topic suffixes.
+const (
+	KindTelemetry = "telemetry"
+	KindStatus    = "status"
+	KindEvent     = "event"
+)
+
 // Status reasons.
 const (
 	ReasonConnect  = "connect"

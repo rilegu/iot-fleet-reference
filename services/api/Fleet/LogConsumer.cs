@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using NATS.Client.Core;
 using NATS.Client.JetStream;
@@ -153,6 +155,35 @@ public sealed class LogConsumer : BackgroundService
         if (payload is null || payload.Length == 0) return;
 
         var kind = Header(msg, "Fleet-Kind");
+
+        // Continue the trace rather than starting one. Ingest forwarded the device's W3C
+        // context as a header precisely so the span created here joins the same trace,
+        // making device to dashboard a single timeline instead of four disconnected ones.
+        var parent = Header(msg, "traceparent");
+        var context = default(ActivityContext);
+        var hasParent = parent is not null && ActivityContext.TryParse(parent, null, out context);
+
+        using var activity = hasParent
+            ? FleetTelemetry.Source.StartActivity($"project {kind}", ActivityKind.Consumer, context)
+            : FleetTelemetry.Source.StartActivity($"project {kind}", ActivityKind.Consumer);
+
+        activity?.SetTag("fleet.device_id", Header(msg, "Fleet-Device"));
+        activity?.SetTag("fleet.site", Header(msg, "Fleet-Site"));
+        activity?.SetTag("fleet.message_kind", kind);
+
+        // Lag between ingest observing the message and the projection applying it. Both
+        // stamps come from server-side clocks; the device's own timestamp is data, not a
+        // measurement, because it drifts and a clock_step fault rewinds it on purpose.
+        var receivedAt = Header(msg, "Fleet-Received-At");
+        if (receivedAt is not null &&
+            DateTimeOffset.TryParse(receivedAt, CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind, out var stamped))
+        {
+            var lag = (DateTimeOffset.UtcNow - stamped).TotalSeconds;
+            if (lag >= 0) FleetTelemetry.ApplyLag.Record(lag, new KeyValuePair<string, object?>("kind", kind));
+        }
+
+        if (kind is not null) FleetTelemetry.Applied.Add(1, new KeyValuePair<string, object?>("kind", kind));
         // A retained replay is historical. Ingest forwards the flag precisely so the
         // projection does not treat a replayed baseline as a live message; dropping it here
         // reintroduces the phantom-gap bug recorded in contracts/README.md.
