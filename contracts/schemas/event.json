@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rilegu.github.io/iot-fleet-reference/schemas/event.json",
+  "title": "Device event",
+  "description": "A discrete state change or fault, as opposed to a periodic sample. Published at QoS 1: losing one loses information that telemetry will not repeat.",
+  "allOf": [{ "$ref": "envelope.json" }],
+  "type": "object",
+  "required": ["schema", "device_id", "site", "boot_id", "seq", "ts", "kind", "severity"],
+  "properties": {
+    "schema": { "const": "event/1" },
+    "kind": {
+      "description": "What happened. Closed set: an unrecognised kind means the consumer is older than the device.",
+      "enum": [
+        "boot",
+        "sensor_fault",
+        "brownout",
+        "threshold_breach",
+        "network_degraded",
+        "clock_step"
+      ]
+    },
+    "severity": { "enum": ["info", "warning", "critical"] },
+    "detail": {
+      "description": "Human-readable context. Never parsed; anything a consumer must act on belongs in a typed field.",
+      "type": "string",
+      "maxLength": 256
+    },
+    "metric": {
+      "description": "Which metric the event concerns, when it concerns one.",
+      "type": "string",
+      "maxLength": 32
+    },
+    "value": { "type": "number" }
+  },
+  "unevaluatedProperties": false
+}

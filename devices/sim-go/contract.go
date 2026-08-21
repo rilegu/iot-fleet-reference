@@ -39,6 +39,7 @@ type Telemetry struct {
 const (
 	SchemaTelemetry = "telemetry/1"
 	SchemaStatus    = "status/1"
+	SchemaEvent     = "event/1"
 )
 
 // Status reasons.
@@ -47,6 +48,17 @@ const (
 	ReasonShutdown = "shutdown"
 	ReasonLWT      = "lwt"
 )
+
+// Event is a discrete state change or fault, as opposed to a periodic sample. Published
+// at QoS 1: losing one loses information telemetry will not repeat.
+type Event struct {
+	Envelope
+	Kind     string   `json:"kind"`
+	Severity string   `json:"severity"`
+	Detail   string   `json:"detail,omitempty"`
+	Metric   string   `json:"metric,omitempty"`
+	Value    *float64 `json:"value,omitempty"`
+}
 
 type Status struct {
 	Envelope
@@ -62,6 +74,10 @@ func topicTelemetry(site, deviceID string) string {
 
 func topicStatus(site, deviceID string) string {
 	return fmt.Sprintf("fleet/%s/%s/status", site, deviceID)
+}
+
+func topicEvent(site, deviceID string) string {
+	return fmt.Sprintf("fleet/%s/%s/event", site, deviceID)
 }
 
 func nowRFC3339() string {

@@ -9,7 +9,7 @@ import (
 )
 
 func newTestDevice() *Device {
-	return NewDevice(42, "site-01", "tcp://localhost:1883", time.Second, rand.New(rand.NewSource(1)))
+	return NewDevice(42, "site-01", "tcp://localhost:1883", time.Second, 0, rand.New(rand.NewSource(1)))
 }
 
 // TestEnvelopeConcurrent exercises the path that paho's OnConnect handler and the device
@@ -135,7 +135,7 @@ func TestTopics(t *testing.T) {
 func TestSeedIsReproducible(t *testing.T) {
 	build := func() []float64 {
 		seeder := rand.New(rand.NewSource(7))
-		d := NewDevice(1, "site-00", "tcp://localhost:1883", time.Second, rand.New(rand.NewSource(seeder.Int63())))
+		d := NewDevice(1, "site-00", "tcp://localhost:1883", time.Second, 0, rand.New(rand.NewSource(seeder.Int63())))
 		out := make([]float64, 0, 10)
 		for i := 0; i < 10; i++ {
 			d.walk()

@@ -16,12 +16,14 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
 
 type config struct {
+	profile      string
 	broker       string
 	devices      int
 	sites        int
@@ -29,6 +31,7 @@ type config struct {
 	seed         int64
 	flapPct      float64
 	flapInterval time.Duration
+	faultPct     float64
 }
 
 func main() {
@@ -38,11 +41,13 @@ func main() {
 	slog.SetDefault(log)
 
 	log.Info("starting fleet simulator",
+		"profile", cfg.profile,
 		"broker", cfg.broker,
 		"devices", cfg.devices,
 		"sites", cfg.sites,
 		"rate", cfg.rate,
 		"seed", cfg.seed,
+		"fault_pct", cfg.faultPct,
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -56,7 +61,7 @@ func main() {
 	for i := 0; i < cfg.devices; i++ {
 		site := fmt.Sprintf("site-%02d", i%cfg.sites)
 		rng := rand.New(rand.NewSource(seeder.Int63()))
-		fleet = append(fleet, NewDevice(i, site, cfg.broker, cfg.rate, rng))
+		fleet = append(fleet, NewDevice(i, site, cfg.broker, cfg.rate, cfg.faultPct, rng))
 	}
 
 	var wg sync.WaitGroup
@@ -128,17 +133,40 @@ func runFlapper(ctx context.Context, fleet []*Device, cfg config, rng *rand.Rand
 	}
 }
 
-// parseConfig reads flags, falling back to SIM_* environment variables so the same
-// binary is configured identically from a shell and from Compose.
+// parseConfig resolves settings in three layers: a named profile supplies defaults, then
+// SIM_* environment variables override it, then command-line flags override those. A
+// profile is a starting point, never a straitjacket.
 func parseConfig() config {
-	cfg := config{}
+	profileName := envStr("SIM_PROFILE", "dev")
+	// The profile has to be resolved before flag defaults are computed, so it is read
+	// from the raw arguments rather than from the flag package.
+	for i, a := range os.Args[1:] {
+		if a == "--profile" || a == "-profile" {
+			if i+1 < len(os.Args)-1 {
+				profileName = os.Args[i+2]
+			}
+		} else if strings.HasPrefix(a, "--profile=") {
+			profileName = strings.TrimPrefix(a, "--profile=")
+		} else if strings.HasPrefix(a, "-profile=") {
+			profileName = strings.TrimPrefix(a, "-profile=")
+		}
+	}
+
+	p, err := ProfileByName(profileName)
+	if err != nil {
+		fatalf("%v", err)
+	}
+
+	cfg := config{profile: p.Name}
+	flag.StringVar(&cfg.profile, "profile", p.Name, "fleet profile: "+strings.Join(ProfileNames(), ", "))
 	flag.StringVar(&cfg.broker, "broker", envStr("SIM_BROKER", "tcp://localhost:1883"), "broker URL")
-	flag.IntVar(&cfg.devices, "devices", envInt("SIM_DEVICES", 100), "number of simulated devices")
-	flag.IntVar(&cfg.sites, "sites", envInt("SIM_SITES", 4), "number of sites to spread devices across")
-	flag.DurationVar(&cfg.rate, "rate", envDur("SIM_RATE", time.Second), "telemetry interval per device")
+	flag.IntVar(&cfg.devices, "devices", envInt("SIM_DEVICES", p.Devices), "number of simulated devices")
+	flag.IntVar(&cfg.sites, "sites", envInt("SIM_SITES", p.Sites), "number of sites to spread devices across")
+	flag.DurationVar(&cfg.rate, "rate", envDur("SIM_RATE", p.Rate), "telemetry interval per device")
 	flag.Int64Var(&cfg.seed, "seed", int64(envInt("SIM_SEED", 1)), "RNG seed; the same seed reproduces a run")
-	flag.Float64Var(&cfg.flapPct, "flap-pct", envFloat("SIM_FLAP_PCT", 0), "percent of devices to drop ungracefully each interval")
-	flag.DurationVar(&cfg.flapInterval, "flap-interval", envDur("SIM_FLAP_INTERVAL", 30*time.Second), "how often to flap devices")
+	flag.Float64Var(&cfg.flapPct, "flap-pct", envFloat("SIM_FLAP_PCT", p.FlapPct), "percent of devices to drop ungracefully each interval")
+	flag.DurationVar(&cfg.flapInterval, "flap-interval", envDur("SIM_FLAP_INTERVAL", p.FlapInterval), "how often to flap devices")
+	flag.Float64Var(&cfg.faultPct, "fault-pct", envFloat("SIM_FAULT_PCT", p.FaultPct), "percent chance per device per tick of injecting a fault")
 	flag.Parse()
 
 	if cfg.devices < 1 {
@@ -152,6 +180,9 @@ func parseConfig() config {
 	}
 	if cfg.flapPct < 0 || cfg.flapPct > 100 {
 		fatalf("--flap-pct must be between 0 and 100, got %v", cfg.flapPct)
+	}
+	if cfg.faultPct < 0 || cfg.faultPct > 100 {
+		fatalf("--fault-pct must be between 0 and 100, got %v", cfg.faultPct)
 	}
 	return cfg
 }
