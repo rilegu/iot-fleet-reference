@@ -233,7 +233,7 @@ On top of that core:
 | **WPF** | **MVVM** — the same ViewModels, bound with classic `Binding` | Shares `Fleet.Client.Xaml` with WinUI unchanged, which is what makes the reuse claim checkable rather than asserted. |
 | **Blazor** | Store subscription + `InvokeAsync(StateHasChanged)` | Blazor's native idiom, not `INotifyPropertyChanged`. Reuses transport, reconciliation and query logic. |
 | **Qt/QML** | Model/View — `QAbstractTableModel` + `Q_PROPERTY` | Qt's own terminology and structure. |
-| **Electron** | Signals/observable store + virtualized grid | The mainstream web idiom. |
+| **Electron** | External store read through `useSyncExternalStore`, virtualized grid | React, Vite and Tailwind. Its own reconciler in TypeScript, pinned by tests mirroring the .NET ones. |
 | **Flutter** | `ChangeNotifier` or Riverpod | Whichever the comparison finds cleaner. |
 
 The reuse that matters — transport, reconnect, snapshot/delta reconciliation, filter/sort/
@@ -268,6 +268,7 @@ clients/
     wpf/                  thin: XAML + dispatcher
     blazor/               consumes FleetStore directly, no ViewModels
     *.Tests/              reconciliation and ViewModel tests
+  electron/               TS   — own implementation, main-process transport
   qt/                     C++  — own implementation
   electron/               TS   — own implementation
   flutter/                Dart — own implementation
@@ -280,6 +281,23 @@ gets selection and row highlighting from `ListView`; WinUI's `ItemsRepeater` has
 model, so the row carries its own flag and a tap handler resolves it by index — a repeater
 whose template uses `x:Bind` never sets `DataContext` on the realised row. Neither difference
 reaches the ViewModels, which is the point.
+
+### The browser security model is a boundary too
+
+The Electron client was the first one for which the browser origin model applies at all, and
+it surfaced a constraint the .NET clients never could. Its renderer is a Chromium page, so its
+requests are subject to the same-origin policy; the API sets no CORS headers, because WPF and
+WinUI are not browsers and Blazor Server calls it server-side.
+
+Adding a CORS policy would have been one line of backend configuration, and was rejected on
+the same grounds as everything else here: adding a UI framework must not require touching the
+backend. The client does its networking in its Node main process instead and passes results to
+the renderer over a typed IPC bridge, which is also what leaves the renderer sandboxed with no
+outbound network of its own.
+
+The honest consequence is that a *browser-hosted* dashboard, as opposed to an Electron-hosted
+one, would need that CORS policy. G3 holds for UI frameworks; it does not exempt the API from
+ever growing deployment configuration for a new class of host.
 
 ### Reuse is deliberately not maximised
 
@@ -387,6 +405,7 @@ clients/                                                    [native Windows]
     winui/  wpf/        thin XAML + dispatcher
     blazor/             consumes FleetStore directly
     *.Tests/            reconciliation and ViewModel tests
+  electron/             TypeScript, React, Vite; its own reconciler
   qt/  electron/  flutter/
 tools/                  Python: conformance suite, load orchestration, analysis
 docs/

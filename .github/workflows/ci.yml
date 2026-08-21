@@ -103,6 +103,52 @@ jobs:
       - name: Build WinUI
         run: dotnet build clients/dotnet/winui -c Release
 
+  electron:
+    name: Electron client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: clients/electron/package-lock.json
+
+      # ci, not install: the lockfile is the build input, and a job that silently resolves a
+      # different tree from the one committed is not testing what will ship.
+      #
+      # The Electron binary is a ~100 MB download that nothing here needs — this job builds and
+      # tests, it never opens a window — so the postinstall that fetches it is skipped.
+      - name: Install
+        run: npm ci
+        working-directory: clients/electron
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      # The counterpart of the gofmt and vet steps in the Go job. typescript-eslint does not
+      # yet accept TypeScript 7 as a peer, and downgrading the compiler to suit a linter is the
+      # wrong way round, so this uses oxlint, which does not bind to the TypeScript API.
+      - name: Lint
+        run: npm run lint
+        working-directory: clients/electron
+
+      # Both sides are type-checked separately. They have different globals, and a single
+      # permissive config would let renderer code reach for Node APIs it does not have.
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: clients/electron
+
+      # These mirror Fleet.Client.Core.Tests. A failure here means the TypeScript reconciler
+      # and the C# one have diverged, which is the whole risk of implementing it twice.
+      - name: Test
+        run: npm test
+        working-directory: clients/electron
+
+      - name: Build
+        run: npm run build
+        working-directory: clients/electron
+
   contract:
     name: Contract
     runs-on: ubuntu-latest

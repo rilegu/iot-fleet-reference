@@ -1,0 +1,36 @@
+@import 'tailwindcss';
+
+/*
+  The palette is shared with the WPF client on purpose. Comparing frameworks is only
+  meaningful if the thing being compared looks the same in each, so the colours, row height
+  and column widths are held constant and only the implementation varies.
+*/
+@theme {
+  --color-bg: #14161a;
+  --color-panel: #1a1d23;
+  --color-fg: #e6e8eb;
+  --color-muted: #98a1ad;
+  --color-line: #2a2f38;
+  --color-ok: #75e0a7;
+  --color-bad: #fda29b;
+  --color-warn: #f7b27a;
+  --color-hit: #16233a;
+  --color-accent: #84adff;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  /* A dashboard is a fixed-frame application, not a document: the grid scrolls, the page does not. */
+  overflow: hidden;
+  user-select: none;
+}

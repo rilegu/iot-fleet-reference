@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react", "oxc", "promise"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error"
+  },
+  "env": { "browser": true, "es2024": true, "node": true },
+  "rules": {
+    "react/react-in-jsx-scope": "off",
+    "react/incompatible-library": "off",
+    "promise/always-return": "off"
+  },
+  "ignorePatterns": ["out", "dist", "node_modules"]
+}
