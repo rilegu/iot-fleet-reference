@@ -1,0 +1,221 @@
+/* Fleet dashboard.
+ *
+ * The grid is a CSS grid of fixed-height rows rather than a <table>. Virtualize needs every
+ * row to be exactly ItemSize tall to place its scroll spacers correctly, and table layout
+ * makes that hard to guarantee: a table sizes rows to content, so one long value silently
+ * breaks the virtualization maths and rows start to drift or blank out while scrolling.
+ */
+
+:root {
+    --bg: #ffffff;
+    --panel: #f7f8fa;
+    --fg: #16181d;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --row: #fafbfc;
+    --ok: #067647;
+    --ok-bg: #ecfdf3;
+    --bad: #b42318;
+    --bad-bg: #fef3f2;
+    --warn: #b54708;
+    --warn-bg: #fffaeb;
+    --hit: #eff6ff;
+    --accent: #175cd3;
+}
+
+/* Only the tokens change between themes. Nothing below redefines a colour, so a value can
+ * never exist in one theme and be missing in the other. */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #14161a;
+        --panel: #1a1d23;
+        --fg: #e6e8eb;
+        --muted: #98a1ad;
+        --line: #2a2f38;
+        --row: #191c21;
+        --ok: #75e0a7;
+        --ok-bg: #05301f;
+        --bad: #fda29b;
+        --bad-bg: #3a1211;
+        --warn: #f7b27a;
+        --warn-bg: #2e1c0b;
+        --hit: #16233a;
+        --accent: #84adff;
+    }
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.mono, .c-id, .c-num, .c-fw { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+
+/* ---- header ---------------------------------------------------------------------- */
+
+.bar {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    padding: .75rem 1rem;
+    border-bottom: 1px solid var(--line);
+}
+
+.bar h1 { font-size: 1rem; margin: 0; }
+
+.conn { font-size: .75rem; color: var(--muted); }
+.conn.up::before { content: "\25CF"; color: var(--ok); margin-right: .35rem; }
+
+/* The reconnect indicator pulses so a stalled dashboard is obvious at a glance rather than
+ * looking like a fleet that simply stopped changing. */
+.conn.down::before { content: "\25CF"; color: var(--bad); margin-right: .35rem; animation: pulse 1s infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+
+/* ---- aggregates ------------------------------------------------------------------ */
+
+.stats { display: flex; flex-wrap: wrap; gap: .5rem; padding: .75rem 1rem; }
+
+.stat {
+    display: flex;
+    flex-direction: column;
+    min-width: 5rem;
+    padding: .4rem .7rem;
+    border: 1px solid var(--line);
+    border-radius: .5rem;
+    background: var(--panel);
+}
+
+.stat .n { font-size: 1.3rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .l { font-size: .65rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.stat.ok .n { color: var(--ok); }
+.stat.warn .n { color: var(--warn); }
+.stat.bad .n { color: var(--bad); }
+
+/* ---- filters --------------------------------------------------------------------- */
+
+.filters {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    padding: 0 1rem .75rem;
+    flex-wrap: wrap;
+}
+
+.filters input[type=search], .filters select {
+    padding: .3rem .5rem;
+    border: 1px solid var(--line);
+    border-radius: .375rem;
+    background: var(--bg);
+    color: var(--fg);
+    font: inherit;
+}
+
+.filters input[type=search] { min-width: 16rem; }
+.filters label { color: var(--muted); display: flex; align-items: center; gap: .3rem; }
+.filters .count { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* ---- grid ------------------------------------------------------------------------ */
+
+.grid { padding: 0 1rem 1rem; }
+
+.row {
+    display: grid;
+    grid-template-columns: 8.5rem 5rem 6rem 5rem 4rem 4rem 4rem 4rem 5rem 3.5rem 1fr;
+    align-items: center;
+    height: 26px;                 /* must equal Virtualize ItemSize */
+    padding: 0 .35rem;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.row.head {
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    color: var(--muted);
+    font-size: .7rem;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    z-index: 1;
+}
+
+.row.head span { cursor: pointer; user-select: none; }
+.row.head span:hover { color: var(--fg); }
+
+/* A fixed-height scroll container is what gives Virtualize a viewport to measure. Without
+ * one it would try to render the whole collection. */
+.body { height: calc(100vh - 15rem); min-height: 20rem; overflow-y: auto; }
+
+.body .row:nth-child(even) { background: var(--row); }
+.body .row { cursor: pointer; }
+.body .row:hover { background: var(--panel); }
+.row.offline { opacity: .5; }
+
+/* Rows that arrived in the latest delta flash briefly. This is the delta cadence made
+ * visible: at 4 Hz you see distinct waves, and raising the rate visibly smears them. */
+.row.hit { background: var(--hit); animation: fade .6s ease-out; }
+@keyframes fade { from { background: var(--hit); } to { background: transparent; } }
+
+.c-num { text-align: right; padding-right: .5rem; font-variant-numeric: tabular-nums; }
+.dim { color: var(--muted); }
+.warn { color: var(--warn); font-weight: 600; }
+
+.badge {
+    display: inline-block;
+    padding: 0 .4rem;
+    border-radius: 999px;
+    font-size: .65rem;
+    font-style: normal;
+    font-weight: 600;
+}
+
+.badge.ok { color: var(--ok); background: var(--ok-bg); }
+.badge.bad { color: var(--bad); background: var(--bad-bg); }
+.badge.sev-info { color: var(--muted); background: var(--panel); }
+.badge.sev-warning { color: var(--warn); background: var(--warn-bg); }
+.badge.sev-critical { color: var(--bad); background: var(--bad-bg); }
+
+/* ---- detail panel ---------------------------------------------------------------- */
+
+.detail {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: min(26rem, 90vw);
+    padding: 1rem 1.25rem;
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+    overflow-y: auto;
+    box-shadow: -8px 0 24px rgb(0 0 0 / .08);
+}
+
+.detail header { display: flex; align-items: center; justify-content: space-between; }
+.detail h2 { font-size: .95rem; margin: 0; font-family: ui-monospace, Consolas, monospace; }
+.detail h3 { font-size: .7rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 1.25rem 0 .4rem; }
+
+.close { background: none; border: none; color: var(--muted); font-size: 1.4rem; cursor: pointer; line-height: 1; }
+.close:hover { color: var(--fg); }
+
+.detail dl { display: grid; grid-template-columns: 6rem 1fr; gap: .2rem .75rem; margin: .75rem 0 0; }
+.detail dt { color: var(--muted); font-size: .75rem; }
+.detail dd { margin: 0; font-size: .8rem; overflow-wrap: anywhere; }
+
+.readings { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+.readings div { flex: 1 1 4rem; padding: .4rem .5rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--bg); }
+.readings .n { display: block; font-size: 1.05rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.readings .l { font-size: .65rem; color: var(--muted); }
+
+.spark { width: 100%; height: 60px; }
+.spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.sparkscale { display: flex; justify-content: space-between; font-size: .65rem; color: var(--muted); }
+
+.events { list-style: none; margin: 0; padding: 0; font-size: .75rem; }
+.events li { display: flex; gap: .4rem; align-items: baseline; padding: .25rem 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.events .when { color: var(--muted); font-variant-numeric: tabular-nums; }
+.events .detail-text { color: var(--muted); flex-basis: 100%; }
+
+.muted { color: var(--muted); font-size: .8rem; }

@@ -1,12 +1,10 @@
-# Broker, simulated fleet, telemetry storage, event log, ingest and the API.
+# Broker, simulated fleet, telemetry storage, event log, ingest, API and dashboard.
 #
-# By default the API is left out, so it can be run on the host with a debugger attached
-# while everything it depends on runs in containers:
+# By default the API and dashboard are left out, so either can run on the host with a
+# debugger attached while everything they depend on runs in containers:
 #
 #   docker compose up -d                  broker, fleet, database, log, ingest
-#   docker compose --profile full up -d   the above plus the API
-#
-# The dashboard is not built yet.
+#   docker compose --profile full up -d   the above plus the API and dashboard
 
 name: iot-fleet
 
@@ -154,7 +152,35 @@ services:
       retries: 10
       start_period: 20s
 
+  fleet-dashboard:
+    # Only started with --profile full, for the same reason as the API: the inner loop runs
+    # it on the host.
+    profiles: ["full"]
+    build:
+      context: ..
+      dockerfile: clients/dotnet/blazor/Dockerfile
+    image: iot-fleet/dashboard:dev
+    container_name: fleet-dashboard
+    restart: unless-stopped
+    depends_on:
+      fleet-api:
+        condition: service_healthy
+    environment:
+      # Reached from the browser over the container network name would fail: the WebSocket
+      # is opened by the dashboard server, not the browser, so this is a container-to-
+      # container address.
+      Api__BaseUrl: http://fleet-api:8080
+      Api__MaxRateHz: "4"
+      # Survives rebuilds. A regenerated key ring invalidates any antiforgery cookie a
+      # browser still holds, which silently prevents the Blazor circuit from starting.
+      DataProtection__KeyRingPath: /keys
+    volumes:
+      - dashboard-keys:/keys
+    ports:
+      - "8090:8090"
+
 volumes:
+  dashboard-keys:
   mosquitto-data:
   timescale-data:
   nats-data:

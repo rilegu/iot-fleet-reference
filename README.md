@@ -23,11 +23,11 @@ to prove that a new UI framework requires no backend change.
 
 ## Status
 
-The backend works end to end: a simulated fleet publishes over MQTT, ingest validates every
+The system works end to end: a simulated fleet publishes over MQTT, ingest validates every
 payload against the schemas in `contracts/` and writes it to TimescaleDB and a durable NATS
-JetStream log, and the API projects that log into live fleet state served over REST and a
-coalesced WebSocket channel. No real dashboard exists yet — the only client is a throwaway
-viewer that bypasses the pipeline entirely.
+JetStream log, the API projects that log into live fleet state served over REST and a
+coalesced WebSocket channel, and a Blazor dashboard renders a thousand live devices from it.
+The remaining UI frameworks are not built, so there is nothing to compare yet.
 
 **Legend:** ✅ working · 🚧 in progress · ⬜ not started
 
@@ -44,14 +44,14 @@ viewer that bypasses the pipeline entirely.
 | Event log (NATS JetStream) | ✅ | Durable and replayable; carries the payload verbatim with ingest metadata in headers |
 | Fleet API (REST + WebSocket) | ✅ | Log-driven projection with `(boot_id, seq)` ordering, replay on restart, REST queries, history from continuous aggregates |
 | Snapshot/delta protocol | 🚧 | Snapshot plus coalesced per-device deltas at a client-capped cadence; field-level deltas and per-connection backpressure still to come |
+| Shared .NET client state core | ✅ | Transport, reconnect with jittered backoff, frame reconciliation — consumed directly by Blazor, and by the XAML clients through ViewModels when they land |
 | Device agent (C99) | ⬜ | Constrained-device implementation of the same contract |
 
 ### Dashboards
 
 | Client | Status | Notes |
 |---|:--:|---|
-| Exploratory viewer | ✅ | Plain polled table reading MQTT directly, bypassing the pipeline. [Throwaway](services/api-spike/README.md) |
-| Blazor | ⬜ | |
+| Blazor | ✅ | Virtualized grid over the shared .NET state core, device detail with history and events |
 | WinUI 3 | ⬜ | |
 | WPF | ⬜ | Shares ViewModels with WinUI 3 |
 | Qt / QML | ⬜ | |
@@ -190,12 +190,21 @@ docker compose -f deploy/compose.yaml --profile full up -d --build
 ```
 
 That brings up the broker, a simulated fleet, TimescaleDB, NATS JetStream, the ingest
-service and the API. Omit `--profile full` to leave the API out and run it on your machine
-with a debugger attached:
+service, the API and the dashboard:
+
+```
+http://localhost:8090     dashboard
+http://localhost:8080     API
+http://localhost:9101     ingest counters
+```
+
+Omit `--profile full` to leave the API and dashboard out and run either on your machine with
+a debugger attached:
 
 ```bash
-docker compose -f deploy/compose.yaml up -d      # everything except the API
-dotnet run --project services/api                # http://localhost:5200
+docker compose -f deploy/compose.yaml up -d              # infrastructure only
+dotnet run --project services/api                        # http://localhost:5200
+dotnet run --project clients/dotnet/blazor               # http://localhost:5300
 ```
 
 The API refuses traffic until it has replayed the log, so `readyz` is the signal to watch,
@@ -335,13 +344,15 @@ devices/
   agent-c/              C99 reference device agent                           (planned)
   scenarios/            fault injection and lifecycle definitions            (planned)
 services/
-  api-spike/            throwaway viewer, replaced once a real dashboard exists
   ingest/               Go ingest service
   api/                  .NET 10 API service
   api.tests/            projection ordering and idempotency tests
-clients/                                                                     (planned)
-  dotnet/               shared state core, XAML ViewModels, WinUI, WPF, Blazor
-  qt/  electron/  flutter/
+clients/
+  dotnet/
+    Fleet.Client.Core/  transport, reconnection, frame reconciliation
+    blazor/             virtualized dashboard
+    winui/  wpf/        XAML clients over the same core        (planned)
+  qt/  electron/  flutter/                                     (planned)
 tools/                  Python: conformance suite, load orchestration        (planned)
 docs/                   architecture and decision records
 ```
@@ -351,6 +362,7 @@ docs/                   architecture and decision records
 - [Architecture](docs/architecture.md) — topology, contracts, realtime protocol, security,
   scale targets, build order
 - [Decision records](docs/adr/) — why the system is built this way
+- [.NET clients](clients/dotnet/README.md) — the shared state core, the dashboard, and what makes a thousand rows render
 - Scale testing — measured ceilings and failure modes *(not published yet)*
 - UI comparison — framework results under identical load *(not published yet)*
 

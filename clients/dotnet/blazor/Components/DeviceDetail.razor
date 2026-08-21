@@ -1,0 +1,186 @@
+@using Fleet.Client.Core
+@using FleetDashboard
+@implements IDisposable
+@inject FleetView View
+
+@*
+    Detail panel for one device.
+
+    Live fields come from the store, which is already up to date — no extra request is
+    needed for them. History and events do require a request, because the realtime channel
+    carries current state only: pushing every device's history to every client would undo
+    the bandwidth saving the delta protocol exists to make.
+
+    Those requests fire once when the panel opens for a device, not on every frame. The
+    live numbers keep updating from the socket underneath; only the chart is a point-in-time
+    read.
+*@
+
+<aside class="detail">
+    <header>
+        <h2>@Device.DeviceId</h2>
+        <button class="close" @onclick="OnClose">&times;</button>
+    </header>
+
+    <dl>
+        <dt>Site</dt><dd>@Device.Site</dd>
+        <dt>Status</dt>
+        <dd>
+            @if (Device.Online)
+            {
+                <em class="badge ok">online</em>
+            }
+            else
+            {
+                <em class="badge bad">@(Device.OfflineReason ?? "offline")</em>
+            }
+        </dd>
+        <dt>Model</dt><dd>@Device.Model</dd>
+        <dt>Firmware</dt><dd>@Device.FwVersion</dd>
+        @* boot_id is shown because it is the ordering key: when it changes, the device
+           rebooted and its sequence restarted. Surfacing it makes an otherwise invisible
+           lifecycle event legible. *@
+        <dt>Boot</dt><dd class="mono">@Device.BootId</dd>
+        <dt>Sequence</dt><dd class="mono">@Device.Seq</dd>
+        <dt>Gaps</dt><dd class="mono @(Device.Gaps > 0 ? "warn" : "")">@Device.Gaps</dd>
+        <dt>Last seen</dt><dd>@Device.LastSeen.ToLocalTime().ToString("HH:mm:ss")</dd>
+    </dl>
+
+    @if (Device.Metrics is { } m)
+    {
+        <div class="readings">
+            <div><span class="n">@m.TempC.ToString("0.0")</span><span class="l">°C</span></div>
+            <div><span class="n">@m.HumidityPct.ToString("0.0")</span><span class="l">RH%</span></div>
+            <div><span class="n">@m.VoltageV.ToString("0.00")</span><span class="l">volts</span></div>
+            <div><span class="n">@m.RssiDbm</span><span class="l">dBm</span></div>
+            <div><span class="n">@FormatUptime(m.UptimeS)</span><span class="l">uptime</span></div>
+        </div>
+    }
+
+    <h3>Temperature, last hour</h3>
+    @if (_history.Count < 2)
+    {
+        <p class="muted">@(_loading ? "loading…" : "not enough history yet")</p>
+    }
+    else
+    {
+        @* Inline SVG rather than a charting library. One sparkline does not justify a
+           dependency, and hand-drawing it keeps the comparison between UI frameworks about
+           the frameworks rather than about whichever chart package each one happens to use. *@
+        <svg class="spark" viewBox="0 0 300 60" preserveAspectRatio="none" role="img"
+             aria-label="Average temperature over the last hour">
+            <polyline points="@Sparkline()" />
+        </svg>
+        <div class="sparkscale">
+            <span>@_min.ToString("0.0")°</span>
+            <span>@_max.ToString("0.0")°</span>
+        </div>
+    }
+
+    <h3>Recent events</h3>
+    @if (_events.Count == 0)
+    {
+        <p class="muted">@(_loading ? "loading…" : "none recorded")</p>
+    }
+    else
+    {
+        <ul class="events">
+            @foreach (var e in _events)
+            {
+                <li>
+                    <em class="badge sev-@e.Severity">@e.Kind</em>
+                    <span class="when">@e.ReceivedAt.ToLocalTime().ToString("HH:mm:ss")</span>
+                    @if (e.Metric is not null)
+                    {
+                        <span class="mono">@e.Metric = @e.Value?.ToString("0.##")</span>
+                    }
+                    <span class="detail-text">@e.Detail</span>
+                </li>
+            }
+        </ul>
+    }
+</aside>
+
+@code {
+    [Parameter, EditorRequired] public DeviceState Device { get; set; } = default!;
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private IReadOnlyList<TelemetryPoint> _history = Array.Empty<TelemetryPoint>();
+    private IReadOnlyList<DeviceEvent> _events = Array.Empty<DeviceEvent>();
+    private double _min, _max;
+    private bool _loading;
+    private string? _loadedFor;
+    private CancellationTokenSource? _cts;
+
+    // Reloads only when the panel switches to a different device. Device is a new record
+    // instance on every frame, so keying off the object would refetch four times a second.
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedFor == Device.DeviceId) return;
+        _loadedFor = Device.DeviceId;
+
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+
+        _loading = true;
+        _history = Array.Empty<TelemetryPoint>();
+        _events = Array.Empty<DeviceEvent>();
+
+        try
+        {
+            // Both reads are independent, so issue them together rather than in sequence.
+            var historyTask = View.Connection.DeviceHistoryAsync(Device.DeviceId, 60, ct);
+            var eventsTask = View.Connection.EventsAsync(Device.DeviceId, 20, ct);
+            await Task.WhenAll(historyTask, eventsTask);
+
+            _history = historyTask.Result;
+            _events = eventsTask.Result;
+
+            var temps = _history.Where(p => p.TempCAvg.HasValue).Select(p => p.TempCAvg!.Value).ToArray();
+            if (temps.Length > 0) { _min = temps.Min(); _max = temps.Max(); }
+        }
+        catch (OperationCanceledException)
+        {
+            // superseded by a newer selection
+        }
+        catch
+        {
+            // A failed history read must not take the dashboard down: live state still
+            // works, and the panel simply shows nothing for the chart.
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private string Sparkline()
+    {
+        var pts = _history.Where(p => p.TempCAvg.HasValue).Select(p => p.TempCAvg!.Value).ToArray();
+        if (pts.Length < 2) return "";
+
+        // Guard against a flat series: a zero range would divide by zero and collapse the
+        // line to a single value.
+        var range = Math.Max(_max - _min, 0.001);
+        var stepX = 300.0 / (pts.Length - 1);
+
+        return string.Join(' ', pts.Select((v, i) =>
+        {
+            var x = i * stepX;
+            // SVG y grows downward, so the value is inverted to put hot at the top.
+            var y = 58 - ((v - _min) / range * 56);
+            return $"{x.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)},{y.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}";
+        }));
+    }
+
+    private static string FormatUptime(long seconds)
+    {
+        var t = TimeSpan.FromSeconds(seconds);
+        if (t.TotalDays >= 1) return $"{(int)t.TotalDays}d {t.Hours}h";
+        if (t.TotalHours >= 1) return $"{(int)t.TotalHours}h {t.Minutes}m";
+        return $"{(int)t.TotalMinutes}m {t.Seconds}s";
+    }
+
+    public void Dispose() => _cts?.Cancel();
+}

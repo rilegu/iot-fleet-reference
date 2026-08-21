@@ -94,7 +94,7 @@ for every client, so it is a constant in the comparison rather than a variable.
 | `nats` | — | Linux container | Normalized internal event bus with replay (JetStream) |
 | `fleet-ingest` | Go 1.26 | Linux container | MQTT consumer, schema validation, normalization, persistence, fan-out |
 | `fleet-api` | C# / .NET 10 | Linux container, or the host during development | Fleet state projection, REST + WebSocket, authn/authz, command dispatch |
-| `Fleet.Client.Core` | C# / .NET 10 | Windows | Transport, reconciliation, observable fleet state core |
+| `Fleet.Client.Core` | C# / .NET 10 | Windows for the desktop clients; the Linux container for Blazor, whose components run server-side | Transport, reconciliation, observable fleet state core |
 | `clients/*` | varies | Windows | Dashboard implementations |
 | `tools/*` | Python 3.13 | either | Contract conformance suite, load orchestration, comparison analysis |
 
