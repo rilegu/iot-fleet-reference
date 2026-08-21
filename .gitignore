@@ -1,0 +1,14 @@
+# Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+
+# Go binaries built outside the container
+/devices/sim-go/sim-go
+/devices/sim-go/sim-go.exe
+
+# Local environment overrides
+.env
+*.local.json

@@ -1,0 +1,106 @@
+@page "/"
+@rendermode InteractiveServer
+@using ApiSpike.Fleet
+@implements IDisposable
+@inject FleetState State
+
+<PageTitle>Fleet</PageTitle>
+
+<h1>Fleet</h1>
+
+<p class="muted">
+    Exploratory view. Plain table, no virtualization, no delta protocol &mdash; this exists
+    to validate the message contract, not the rendering approach.
+</p>
+
+<div class="stats">
+    <div class="stat"><span class="n">@_stats.Total</span><span class="l">devices</span></div>
+    <div class="stat ok"><span class="n">@_stats.Online</span><span class="l">online</span></div>
+    <div class="stat @(_stats.Offline > 0 ? "warn" : "")"><span class="n">@_stats.Offline</span><span class="l">offline</span></div>
+    <div class="stat"><span class="n">@_stats.TelemetryReceived</span><span class="l">telemetry</span></div>
+    <div class="stat"><span class="n">@_stats.StatusReceived</span><span class="l">status</span></div>
+    <div class="stat @(_stats.Gaps > 0 ? "warn" : "")"><span class="n">@_stats.Gaps</span><span class="l">gaps</span></div>
+    <div class="stat @(_stats.StaleDropped > 0 ? "warn" : "")"><span class="n">@_stats.StaleDropped</span><span class="l">stale</span></div>
+    <div class="stat @(_stats.Rejected > 0 ? "bad" : "")"><span class="n">@_stats.Rejected</span><span class="l">rejected</span></div>
+</div>
+
+@if (_devices.Count == 0)
+{
+    <p class="muted">Waiting for devices. Start the broker and simulator with <code>docker compose up</code> in <code>deploy/</code>.</p>
+}
+else
+{
+    <table>
+        <thead>
+            <tr>
+                <th>Device</th><th>Site</th><th></th><th>Firmware</th>
+                <th class="num">Temp &deg;C</th><th class="num">Humidity %</th><th class="num">Volts</th>
+                <th class="num">RSSI</th><th class="num">Seq</th><th class="num">Gaps</th><th>Last seen</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var d in _devices)
+            {
+                <tr class="@(d.Online ? "" : "offline")">
+                    <td>@d.DeviceId</td>
+                    <td>@d.Site</td>
+                    <td>
+                        @if (d.Online)
+                        {
+                            <span class="badge ok">online</span>
+                        }
+                        else
+                        {
+                            <span class="badge bad">@(d.OfflineReason ?? "offline")</span>
+                        }
+                    </td>
+                    <td>@d.FwVersion</td>
+                    <td class="num">@d.Metrics?.TempC.ToString("0.0")</td>
+                    <td class="num">@d.Metrics?.HumidityPct.ToString("0.0")</td>
+                    <td class="num">@d.Metrics?.VoltageV.ToString("0.00")</td>
+                    <td class="num">@d.Metrics?.RssiDbm</td>
+                    <td class="num">@d.LastSeq</td>
+                    <td class="num @(d.Gaps > 0 ? "warn" : "")">@d.Gaps</td>
+                    <td>@FormatAge(d.LastSeenUtc)</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<DeviceView> _devices = new();
+    private FleetStats _stats = new();
+    private Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        // Poll the projection on a timer. This is the naive approach on purpose: the
+        // snapshot/delta protocol that makes a thousand devices viable is not built yet.
+        _timer = new Timer(_ => InvokeAsync(() =>
+        {
+            Refresh();
+            StateHasChanged();
+        }), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    private void Refresh()
+    {
+        _devices = State.Snapshot()
+            .OrderBy(d => d.Site, StringComparer.Ordinal)
+            .ThenBy(d => d.DeviceId, StringComparer.Ordinal)
+            .ToList();
+        _stats = State.Stats();
+    }
+
+    private static string FormatAge(DateTimeOffset seen)
+    {
+        var age = DateTimeOffset.UtcNow - seen;
+        if (age < TimeSpan.FromSeconds(2)) return "now";
+        if (age < TimeSpan.FromMinutes(1)) return $"{(int)age.TotalSeconds}s ago";
+        return $"{(int)age.TotalMinutes}m ago";
+    }
+
+    public void Dispose() => _timer?.Dispose();
+}

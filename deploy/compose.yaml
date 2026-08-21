@@ -1,0 +1,54 @@
+# Current topology: a broker and a simulated fleet.
+#
+# The ingest service, event log, database and API are not built yet. The .NET consumer that
+# reads this fleet today runs on the host and is throwaway.
+
+name: iot-fleet
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: fleet-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+    healthcheck:
+      # mosquitto_sub with -E exits as soon as the subscription is acknowledged, which
+      # proves the broker is actually accepting sessions rather than merely listening.
+      test: ["CMD", "mosquitto_sub", "-h", "localhost", "-t", "$$SYS/broker/uptime", "-C", "1", "-E", "-W", "3"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  fleet-sim:
+    build:
+      context: ../devices/sim-go
+    image: iot-fleet/sim-go:dev
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    environment:
+      # Overridable from the shell: SIM_DEVICES=1000 docker compose up -d
+      SIM_BROKER: tcp://mosquitto:1883
+      SIM_DEVICES: "${SIM_DEVICES:-100}"
+      SIM_SITES: "${SIM_SITES:-4}"
+      SIM_RATE: "${SIM_RATE:-1s}"
+      SIM_SEED: "${SIM_SEED:-1}"
+      # Percentage of devices that drop their TCP connection ungracefully each interval,
+      # so the broker publishes their Last Will. This is how presence detection is exercised.
+      SIM_FLAP_PCT: "${SIM_FLAP_PCT:-2}"
+      SIM_FLAP_INTERVAL: "${SIM_FLAP_INTERVAL:-20s}"
+    ulimits:
+      # One TCP connection per device. The default file-descriptor limit does not cover
+      # the thousand-device profile, and the failure mode is an opaque connection error.
+      nofile:
+        soft: 65536
+        hard: 65536
+
+volumes:
+  mosquitto-data:

@@ -21,10 +21,54 @@ Along the way it doubles as a controlled comparison: the same dashboard, the sam
 same load, built in **Blazor, WinUI 3, WPF, Qt/QML, and Electron**, with Flutter added last
 to prove that a new UI framework requires no backend change.
 
-> **Status: design phase.** The architecture and its decision records are complete;
-> implementation has not started. The commands in *Running it* describe the intended
-> interface, not something you can run today. Track progress against the
-> [delivery phases](docs/architecture.md#14-delivery-phases).
+## Status
+
+The message contract and the simulated fleet work end to end today. The ingest service,
+event log, database and API do not exist yet, so what currently reads the fleet is a
+throwaway consumer that exists to validate the contract against something that parses it.
+
+**Legend:** ✅ working · 🚧 in progress · ⬜ not started
+
+### Fleet and data path
+
+| Component | Status | Notes |
+|---|:--:|---|
+| MQTT broker (Mosquitto) | ✅ | Plaintext and anonymous; TLS and ACLs not yet |
+| Device simulator (Go) | ✅ | One session, client id and TCP connection per device; Last Will, retained status, seeded reproducible runs, connection flapping |
+| Message contract | 🚧 | Validated end to end and documented in [`contracts/`](contracts/README.md); not yet JSON Schema |
+| Scenario engine | ⬜ | Fault injection, lifecycle events, named fleet profiles |
+| Ingest service (Go) | ⬜ | Schema validation, normalization, dead-lettering |
+| Telemetry history (TimescaleDB) | ⬜ | Hypertables and continuous aggregates |
+| Event log (NATS JetStream) | ⬜ | Durable, replayable ingest-to-API transport |
+| Fleet API (REST + WebSocket) | ⬜ | Fleet projection, queries, commands |
+| Snapshot/delta protocol | ⬜ | Coalesced deltas with per-connection backpressure |
+| Device agent (C99) | ⬜ | Constrained-device implementation of the same contract |
+
+### Dashboards
+
+| Client | Status | Notes |
+|---|:--:|---|
+| Exploratory viewer | ✅ | Plain polled table, no virtualization. [Throwaway](services/api-spike/README.md) |
+| Blazor | ⬜ | |
+| WinUI 3 | ⬜ | |
+| WPF | ⬜ | Shares ViewModels with WinUI 3 |
+| Qt / QML | ⬜ | |
+| Electron | ⬜ | |
+| Flutter | ⬜ | Added last, to show a new framework needs no backend change |
+
+### Cross-cutting
+
+| Concern | Status | Notes |
+|---|:--:|---|
+| Contract codegen + CI drift check | ⬜ | |
+| TLS, per-device identity, broker ACLs | ⬜ | |
+| API authentication, authorization, audit | ⬜ | |
+| Distributed tracing (OpenTelemetry) | ⬜ | Built before the ingest split, not after |
+| Projection checkpoint and replay | ⬜ | |
+| Chaos suite | ⬜ | Kill each component, assert the fleet state converges |
+| Device conformance suite (Python) | ⬜ | |
+| Scale testing to 10 000 devices | ⬜ | |
+| Published UI comparison | ⬜ | |
 
 ---
 
@@ -134,41 +178,72 @@ are treated as data rather than control.
 
 ## Running it
 
-> Planned interface — see the status note above.
+**Requirements:** Docker with Compose, and the .NET 10 SDK for the dashboard.
 
-**Requirements:** Docker with Compose. For the native dashboards, the .NET 10 SDK; Node for
-Electron; Qt 6 for the Qt client.
+From the repository root:
 
 ```bash
-# Bring up the broker, database, event log, ingest, API and a 1000-device fleet
-docker compose --profile full up
+# Broker + 100 simulated devices
+docker compose -f deploy/compose.yaml up -d --build
 
-# Open the Blazor dashboard
-#   http://localhost:8080
+# Viewer, in a second shell
+dotnet run --project services/api-spike
+#   http://localhost:5183
+```
 
-# A smaller fleet for fast iteration
-FLEET_PROFILE=dev docker compose --profile full up
+Devices appear within a couple of seconds. A small percentage are dropped ungracefully
+every 20 seconds so the broker publishes their Last Will and they flip to `lwt` — that is
+the presence path working, not a fault.
 
-# Push it: 10 000 devices across ten simulator replicas
+Fleet size and behaviour are environment variables, all overridable from the shell:
+
+```bash
+SIM_DEVICES=1000 SIM_RATE=500ms docker compose -f deploy/compose.yaml up -d
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SIM_DEVICES` | `100` | Devices to simulate, one MQTT connection each |
+| `SIM_SITES` | `4` | Sites to spread devices across, used in the topic namespace |
+| `SIM_RATE` | `1s` | Telemetry interval per device |
+| `SIM_SEED` | `1` | RNG seed; the same seed reproduces a run exactly |
+| `SIM_FLAP_PCT` | `2` | Percent of devices dropped ungracefully each interval |
+| `SIM_FLAP_INTERVAL` | `20s` | How often that happens |
+
+Watching the wire directly is often more informative than the viewer:
+
+```bash
+docker exec fleet-mosquitto mosquitto_sub -h localhost -t 'fleet/+/+/telemetry' -C 1
+docker exec fleet-mosquitto mosquitto_sub -h localhost -t 'fleet/+/+/status' -v
+```
+
+Stopping:
+
+```bash
+docker compose -f deploy/compose.yaml down       # stop
+docker compose -f deploy/compose.yaml down -v    # also drop retained status messages
+```
+
+Simulator tests, including a race-detector check on the shared sequence path:
+
+```bash
+cd devices/sim-go && go test -race ./...
+```
+
+### Planned interface
+
+None of this works yet; it is the shape the Compose setup is heading toward.
+
+```bash
+docker compose --profile full up          # broker, database, event log, ingest, API
+docker compose --profile infra up         # everything except the API, for debugging it on the host
 FLEET_PROFILE=stress docker compose --profile full up --scale fleet-sim=10
 ```
 
-To work on the API itself, run the infrastructure in containers and the service on your
-machine with a debugger attached:
-
-```bash
-docker compose --profile infra up          # everything except fleet-api
-dotnet run --project services/api
-```
-
-Native dashboards are ordinary applications pointed at the API:
-
-```bash
-dotnet run --project clients/dotnet/winui
-npm start --prefix clients/electron
-```
-
 ### Fleet profiles
+
+Not implemented yet — fleet size is currently set directly with `SIM_DEVICES`. The scenario
+engine behind these profiles adds fault injection and lifecycle events.
 
 | Profile | Devices | Purpose |
 |---|---|---|
@@ -189,31 +264,34 @@ npm start --prefix clients/electron
 
 ## Repository layout
 
+Directories marked *planned* do not exist yet — see [Status](#status).
+
 ```
-contracts/              OpenAPI, AsyncAPI, JSON Schema — the source of truth
-  vectors/              golden reconciliation vectors, run by every client
-deploy/                 compose profiles, mosquitto config, TLS bootstrap
+contracts/              draft message contract; becomes OpenAPI/AsyncAPI/JSON Schema
+  vectors/              golden reconciliation vectors, run by every client   (planned)
+deploy/                 compose file, mosquitto config
 devices/
   sim-go/               Go fleet simulator
-  agent-c/              C99 reference device agent
-  scenarios/            dev / demo / stress definitions, fault injection
+  agent-c/              C99 reference device agent                           (planned)
+  scenarios/            fault injection and lifecycle definitions            (planned)
 services/
-  ingest/               Go ingest service
-  api/                  .NET 10 API service
-clients/
+  api-spike/            throwaway consumer + viewer, replaced by the two below
+  ingest/               Go ingest service                                    (planned)
+  api/                  .NET 10 API service                                  (planned)
+clients/                                                                     (planned)
   dotnet/               shared state core, XAML ViewModels, WinUI, WPF, Blazor
   qt/  electron/  flutter/
-tools/                  Python: conformance suite, load orchestration, analysis
+tools/                  Python: conformance suite, load orchestration        (planned)
 docs/                   architecture and decision records
 ```
 
 ## Documentation
 
 - [Architecture](docs/architecture.md) — topology, contracts, realtime protocol, security,
-  scale targets, delivery phases
+  scale targets, build order
 - [Decision records](docs/adr/) — why the system is built this way
-- Scale testing — measured ceilings and failure modes *(published at phase 7)*
-- UI comparison — framework results under identical load *(published at phase 8)*
+- Scale testing — measured ceilings and failure modes *(not published yet)*
+- UI comparison — framework results under identical load *(not published yet)*
 
 ## License
 

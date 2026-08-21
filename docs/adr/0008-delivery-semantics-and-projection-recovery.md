@@ -157,8 +157,8 @@ produce it.
   cost of the split and it is accepted deliberately.
 - The message envelope grows (`seq`, `boot_id`, `traceparent`), which matters on constrained
   devices. The CBOR encoding path exists partly to offset this.
-- Observability must be built early, not late — it moves from phase 5 to phase 2, because
-  debugging the split without tracing is the risk this ADR exists to remove.
+- Observability must be built early rather than late, because debugging the split without
+  tracing is the risk this ADR exists to remove.
 
 ## Notes
 

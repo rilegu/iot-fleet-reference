@@ -79,15 +79,16 @@ does not justify.
   versioned. A new telemetry field touches JSON Schema, Go types, the event schema, and C#
   models.
 - **Debugging spans eight hops** rather than four. Mitigated only by distributed tracing,
-  which is why observability moves from phase 5 to phase 2 — it is a prerequisite for the
-  split, not a finishing touch.
+  which is why observability is built early — it is a prerequisite for the split, not a
+  finishing touch.
 - **JetStream is real infrastructure**: stream configuration, retention, consumer
   acknowledgement, redelivery, duplicate handling.
 - **A heavier inner loop.** Debugging `fleet-api` on the Windows host requires broker,
   database, ingest and NATS running. The `infra` Compose profile
   ([ADR-0007](0007-linux-containers-windows-dashboards.md)) exists for this.
-- **Ingest is written in Go**, so any logic prototyped in C# during phase 0 is discarded.
-  Phase 0 is therefore explicitly a contract spike, not an architectural starting point.
+- **Ingest is written in Go**, so any logic prototyped in C# while validating the contract
+  is discarded. That early consumer is explicitly a spike, not an architectural starting
+  point.
 
 ## Boundary of this decision
 
