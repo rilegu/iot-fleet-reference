@@ -28,11 +28,12 @@ What is shared is the *contract* and the *behaviour*. `test/store.test.ts` mirro
 filter, sort and sparkline semantics the .NET clients implement, so a divergence fails a
 build rather than showing up as one dashboard quietly disagreeing with another.
 
-One deliberate difference: this client breaks sort ties by device id. The store's array comes
-from `Map` iteration order, which changes whenever a snapshot arrives, so sorting by a column
-with many equal values would otherwise shuffle rows between frames. The .NET clients rely on
-LINQ's stable sort over an equally unstable input, and get an arbitrary but usually unchanging
-order instead.
+Sort ties break by device id, because the store's array comes from `Map` iteration order,
+which changes whenever a snapshot arrives; without a total order, a column with many equal
+values would shuffle rows between frames. This client had that fallback from the start and the
+.NET clients did not, which is how the gap was found — they leaned on LINQ's stable sort over
+an equally undefined input. They carry the same fallback now, reversing with the sort direction
+exactly as this one does.
 
 ## Why the network lives in the main process
 
