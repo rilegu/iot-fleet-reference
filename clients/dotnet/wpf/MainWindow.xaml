@@ -1,0 +1,280 @@
+﻿<Window x:Class="FleetWpf.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:Fleet.Client.Xaml;assembly=Fleet.Client.Xaml"
+        xmlns:local="clr-namespace:FleetWpf"
+        Title="Fleet" Height="760" Width="1280"
+        Background="{DynamicResource Bg}">
+
+    <!--
+        Everything below binds to ViewModels this project does not define. The DataContext is
+        a FleetViewModel from Fleet.Client.Xaml, shared verbatim with the WinUI client; the
+        only thing WPF supplies is a dispatcher.
+
+        The grid is virtualised. A thousand rows realised at once would allocate a thousand
+        row containers and their visual trees, which is the same problem the Blazor client
+        solves with Virtualize — the frameworks differ, the arithmetic does not.
+    -->
+
+    <Window.Resources>
+        <SolidColorBrush x:Key="Bg" Color="#14161A" />
+        <SolidColorBrush x:Key="Panel" Color="#1A1D23" />
+        <SolidColorBrush x:Key="Fg" Color="#E6E8EB" />
+        <SolidColorBrush x:Key="Muted" Color="#98A1AD" />
+        <SolidColorBrush x:Key="Line" Color="#2A2F38" />
+        <SolidColorBrush x:Key="Ok" Color="#75E0A7" />
+        <SolidColorBrush x:Key="Bad" Color="#FDA29B" />
+        <SolidColorBrush x:Key="Warn" Color="#F7B27A" />
+        <SolidColorBrush x:Key="Hit" Color="#16233A" />
+
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource Fg}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <Style x:Key="Stat" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource Panel}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Line}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="MinWidth" Value="86" />
+        </Style>
+
+        <Style x:Key="StatValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="20" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <Style x:Key="StatLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="Foreground" Value="{DynamicResource Muted}" />
+        </Style>
+
+        <Style x:Key="HeaderButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="{DynamicResource Muted}" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+        </Style>
+    </Window.Resources>
+
+    <DockPanel Margin="12">
+
+        <!-- header -->
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+            <TextBlock Text="Fleet" FontSize="17" FontWeight="SemiBold" Margin="0,0,14,0" />
+            <TextBlock Text="{Binding ConnectionSummary}" Foreground="{DynamicResource Muted}" FontSize="12" />
+        </StackPanel>
+
+        <!-- aggregates -->
+        <ItemsControl DockPanel.Dock="Top" Margin="0,0,0,10">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+
+            <Border Style="{StaticResource Stat}">
+                <StackPanel>
+                    <TextBlock Text="{Binding Total}" Style="{StaticResource StatValue}" />
+                    <TextBlock Text="DEVICES" Style="{StaticResource StatLabel}" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Stat}">
+                <StackPanel>
+                    <TextBlock Text="{Binding Online}" Style="{StaticResource StatValue}" Foreground="{DynamicResource Ok}" />
+                    <TextBlock Text="ONLINE" Style="{StaticResource StatLabel}" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Stat}">
+                <StackPanel>
+                    <TextBlock Text="{Binding Offline}" Style="{StaticResource StatValue}" Foreground="{DynamicResource Warn}" />
+                    <TextBlock Text="OFFLINE" Style="{StaticResource StatLabel}" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Stat}">
+                <StackPanel>
+                    <TextBlock Text="{Binding Alerting}" Style="{StaticResource StatValue}" Foreground="{DynamicResource Bad}" />
+                    <TextBlock Text="ALERTING" Style="{StaticResource StatLabel}" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Stat}">
+                <StackPanel>
+                    <TextBlock Text="{Binding Gaps}" Style="{StaticResource StatValue}" />
+                    <TextBlock Text="GAPS" Style="{StaticResource StatLabel}" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Stat}">
+                <StackPanel>
+                    <TextBlock Text="{Binding StaleDropped}" Style="{StaticResource StatValue}" />
+                    <TextBlock Text="STALE" Style="{StaticResource StatLabel}" />
+                </StackPanel>
+            </Border>
+        </ItemsControl>
+
+        <!-- filters -->
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+            <!-- UpdateSourceTrigger=PropertyChanged gives filter-as-you-type. The default,
+                 LostFocus, would make the box feel broken against live data. -->
+            <TextBox Width="260" Padding="5,3"
+                     Text="{Binding Search, UpdateSourceTrigger=PropertyChanged, Delay=150}"
+                     Background="{DynamicResource Panel}" Foreground="{DynamicResource Fg}"
+                     BorderBrush="{DynamicResource Line}" />
+            <CheckBox Content="online only" Margin="12,0,0,0" VerticalAlignment="Center"
+                      Foreground="{DynamicResource Muted}" IsChecked="{Binding OnlineOnly}" />
+            <CheckBox Content="alerting only" Margin="12,0,0,0" VerticalAlignment="Center"
+                      Foreground="{DynamicResource Muted}" IsChecked="{Binding AlertingOnly}" />
+            <Button Content="clear" Margin="12,0,0,0" Padding="8,3"
+                    Command="{Binding ClearFiltersCommand}" />
+            <TextBlock Margin="16,0,0,0" Foreground="{DynamicResource Muted}" FontSize="12">
+                <Run Text="{Binding Shown, Mode=OneWay}" /><Run Text=" shown" />
+            </TextBlock>
+        </StackPanel>
+
+        <!-- detail panel, docked right and collapsed when nothing is selected -->
+        <ContentControl DockPanel.Dock="Right" Margin="12,0,0,0">
+            <ContentControl.Style>
+                <Style TargetType="ContentControl">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding HasSelection}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </ContentControl.Style>
+            <local:DetailPanel Background="{DynamicResource Panel}" />
+        </ContentControl>
+
+        <!-- grid -->
+        <ListView ItemsSource="{Binding Devices}"
+                  SelectedItem="{Binding Selected}"
+                  Background="Transparent" BorderBrush="{DynamicResource Line}"
+                  Foreground="{DynamicResource Fg}"
+                  ScrollViewer.IsDeferredScrollingEnabled="True"
+                  VirtualizingPanel.IsVirtualizing="True"
+                  VirtualizingPanel.VirtualizationMode="Recycling"
+                  VirtualizingPanel.ScrollUnit="Pixel">
+
+            <ListView.ItemContainerStyle>
+                <Style TargetType="ListViewItem">
+                    <Setter Property="Foreground" Value="{DynamicResource Fg}" />
+                    <Setter Property="Padding" Value="2" />
+                    <Style.Triggers>
+                        <!-- A row that arrived in the latest frame is tinted for exactly one
+                             cadence, which makes the delta rate visible at a glance. -->
+                        <DataTrigger Binding="{Binding JustChanged}" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Hit}" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Online}" Value="False">
+                            <Setter Property="Opacity" Value="0.55" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </ListView.ItemContainerStyle>
+
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Width="130">
+                        <GridViewColumnHeader Content="Device"
+                            Command="{Binding DataContext.SortByCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                            CommandParameter="{x:Static vm:DeviceSort.Device}" />
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate><TextBlock Text="{Binding DeviceId}" FontFamily="Consolas" /></DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+
+                    <GridViewColumn Width="80">
+                        <GridViewColumnHeader Content="Site"
+                            Command="{Binding DataContext.SortByCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                            CommandParameter="{x:Static vm:DeviceSort.Site}" />
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate><TextBlock Text="{Binding Site}" /></DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+
+                    <GridViewColumn Width="90">
+                        <GridViewColumnHeader Content="Status"
+                            Command="{Binding DataContext.SortByCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                            CommandParameter="{x:Static vm:DeviceSort.Status}" />
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate>
+                                <TextBlock>
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="online" />
+                                            <Setter Property="Foreground" Value="{DynamicResource Ok}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Online}" Value="False">
+                                                    <Setter Property="Text" Value="{Binding OfflineReason, TargetNullValue=offline}" />
+                                                    <Setter Property="Foreground" Value="{DynamicResource Bad}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+
+                    <GridViewColumn Header="Firmware" Width="80" DisplayMemberBinding="{Binding Firmware}" />
+
+                    <GridViewColumn Width="70">
+                        <GridViewColumnHeader Content="°C"
+                            Command="{Binding DataContext.SortByCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                            CommandParameter="{x:Static vm:DeviceSort.Temperature}" />
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate><TextBlock Text="{Binding Temperature, StringFormat={}{0:0.0}}" FontFamily="Consolas" /></DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+
+                    <GridViewColumn Header="RH%" Width="70">
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate><TextBlock Text="{Binding Humidity, StringFormat={}{0:0.0}}" FontFamily="Consolas" /></DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+
+                    <GridViewColumn Width="70">
+                        <GridViewColumnHeader Content="Volts"
+                            Command="{Binding DataContext.SortByCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                            CommandParameter="{x:Static vm:DeviceSort.Voltage}" />
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate><TextBlock Text="{Binding Voltage, StringFormat={}{0:0.00}}" FontFamily="Consolas" /></DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+
+                    <GridViewColumn Width="70">
+                        <GridViewColumnHeader Content="RSSI"
+                            Command="{Binding DataContext.SortByCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                            CommandParameter="{x:Static vm:DeviceSort.Signal}" />
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate><TextBlock Text="{Binding Signal}" FontFamily="Consolas" /></DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+
+                    <GridViewColumn Width="80">
+                        <GridViewColumnHeader Content="Seq"
+                            Command="{Binding DataContext.SortByCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                            CommandParameter="{x:Static vm:DeviceSort.Sequence}" />
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate><TextBlock Text="{Binding Seq}" FontFamily="Consolas" Foreground="{DynamicResource Muted}" /></DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+
+                    <GridViewColumn Width="60">
+                        <GridViewColumnHeader Content="Gaps"
+                            Command="{Binding DataContext.SortByCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                            CommandParameter="{x:Static vm:DeviceSort.Gaps}" />
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate><TextBlock Text="{Binding Gaps}" FontFamily="Consolas" /></DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+
+                    <GridViewColumn Header="Last event" Width="160" DisplayMemberBinding="{Binding LastEvent}" />
+                </GridView>
+            </ListView.View>
+        </ListView>
+    </DockPanel>
+</Window>

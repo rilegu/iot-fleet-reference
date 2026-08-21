@@ -1,0 +1,154 @@
+﻿<UserControl x:Class="FleetWpf.DetailPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Width="360" Padding="14">
+
+    <!--
+        Detail for one device.
+
+        Live fields bind straight to the DeviceViewModel the grid already holds, so no
+        request is needed for them and they keep updating from the socket while the panel is
+        open. History and events are fetched once per device by the shared
+        DeviceDetailViewModel, because the realtime channel carries current state only.
+
+        The sparkline is filled from code-behind: the shared ViewModel exposes normalised
+        vertices, and each XAML host scales them into its own geometry type, which the two
+        frameworks do not share.
+    -->
+
+    <UserControl.Resources>
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource Fg}" />
+        </Style>
+        <Style x:Key="Label" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource Muted}" />
+            <Setter Property="FontSize" Value="11" />
+        </Style>
+        <Style x:Key="Section" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource Muted}" />
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="Margin" Value="0,16,0,4" />
+        </Style>
+        <Style x:Key="Reading" TargetType="Border">
+            <Setter Property="BorderBrush" Value="{DynamicResource Line}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="Margin" Value="0,0,6,6" />
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel>
+
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="X" Padding="6,0" FontSize="13"
+                        Background="Transparent" BorderThickness="0"
+                        Foreground="{DynamicResource Muted}"
+                        Command="{Binding CloseDetailCommand}" />
+                <TextBlock Text="{Binding Detail.Device.DeviceId}" FontFamily="Consolas"
+                           FontSize="14" FontWeight="SemiBold" />
+            </DockPanel>
+
+            <Grid Margin="0,12,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="90" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition />
+                    <RowDefinition /><RowDefinition /><RowDefinition />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Site" Style="{StaticResource Label}" />
+                <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Detail.Device.Site}" FontSize="12" />
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Status" Style="{StaticResource Label}" />
+                <TextBlock Grid.Row="1" Grid.Column="1" FontSize="12">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Text" Value="online" />
+                            <Setter Property="Foreground" Value="{DynamicResource Ok}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Detail.Device.Online}" Value="False">
+                                    <Setter Property="Text" Value="{Binding Detail.Device.OfflineReason, TargetNullValue=offline}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource Bad}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="Model" Style="{StaticResource Label}" />
+                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Detail.Device.Model}" FontSize="12" />
+
+                <TextBlock Grid.Row="3" Grid.Column="0" Text="Firmware" Style="{StaticResource Label}" />
+                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Detail.Device.Firmware}" FontSize="12" />
+
+                <!-- Shown because it is the ordering key: a change means the device rebooted
+                     and its sequence restarted, which is otherwise invisible. -->
+                <TextBlock Grid.Row="4" Grid.Column="0" Text="Boot" Style="{StaticResource Label}" />
+                <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Detail.Device.BootId}" FontFamily="Consolas" FontSize="11" />
+
+                <TextBlock Grid.Row="5" Grid.Column="0" Text="Sequence" Style="{StaticResource Label}" />
+                <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding Detail.Device.Seq}" FontFamily="Consolas" FontSize="12" />
+
+                <TextBlock Grid.Row="6" Grid.Column="0" Text="Gaps" Style="{StaticResource Label}" />
+                <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding Detail.Device.Gaps}" FontFamily="Consolas" FontSize="12" />
+            </Grid>
+
+            <UniformGrid Columns="2" Margin="0,14,0,0">
+                <Border Style="{StaticResource Reading}">
+                    <StackPanel>
+                        <TextBlock Text="{Binding Detail.Device.Temperature, StringFormat={}{0:0.0}}" FontSize="17" FontWeight="SemiBold" />
+                        <TextBlock Text="DEG C" Style="{StaticResource Label}" FontSize="10" />
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Reading}">
+                    <StackPanel>
+                        <TextBlock Text="{Binding Detail.Device.Humidity, StringFormat={}{0:0.0}}" FontSize="17" FontWeight="SemiBold" />
+                        <TextBlock Text="RH%" Style="{StaticResource Label}" FontSize="10" />
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Reading}">
+                    <StackPanel>
+                        <TextBlock Text="{Binding Detail.Device.Voltage, StringFormat={}{0:0.00}}" FontSize="17" FontWeight="SemiBold" />
+                        <TextBlock Text="VOLTS" Style="{StaticResource Label}" FontSize="10" />
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Reading}">
+                    <StackPanel>
+                        <TextBlock Text="{Binding Detail.Device.Signal}" FontSize="17" FontWeight="SemiBold" />
+                        <TextBlock Text="dBm" Style="{StaticResource Label}" FontSize="10" />
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+
+            <TextBlock Text="TEMPERATURE, LAST HOUR" Style="{StaticResource Section}" />
+
+            <Border Height="70" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="4">
+                <Canvas x:Name="SparkCanvas" ClipToBounds="True" Background="Transparent">
+                    <Polyline x:Name="SparkLine" Stroke="#84ADFF" StrokeThickness="1.5" />
+                </Canvas>
+            </Border>
+            <TextBlock Text="{Binding Detail.TemperatureRange}" Style="{StaticResource Label}" FontSize="10" Margin="0,2,0,0" />
+
+            <TextBlock Text="RECENT EVENTS" Style="{StaticResource Section}" />
+
+            <ItemsControl ItemsSource="{Binding Detail.Events}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Margin="0,0,0,6">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding Kind}" FontSize="11" FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding Severity}" FontSize="10" Margin="8,0,0,0" Foreground="{DynamicResource Warn}" />
+                                <TextBlock Text="{Binding ReceivedAt, StringFormat={}{0:HH:mm:ss}}" FontSize="10" Margin="8,0,0,0" Foreground="{DynamicResource Muted}" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding Detail}" FontSize="10" Foreground="{DynamicResource Muted}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

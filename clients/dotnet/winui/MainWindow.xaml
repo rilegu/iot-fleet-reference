@@ -1,0 +1,193 @@
+<Window
+    x:Class="FleetWinUI.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:Fleet.Client.Xaml"
+    xmlns:local="using:FleetWinUI">
+
+    <!--
+        The same ViewModels the WPF client binds to, with the differences that XAML dialects
+        force rather than any difference in the model:
+
+        - x:Bind rather than Binding. It compiles to generated code instead of resolving
+          names by reflection at runtime, which matters when a thousand rows each update
+          several fields a second, and it makes a mistyped property a build error.
+        - ItemsRepeater inside a ScrollViewer rather than a ListView with a GridView. WinUI
+          has no GridView columns in the WPF sense, and ItemsRepeater virtualises without
+          bringing selection and item-container machinery that is not needed here. The cost
+          of that is selection: rows carry their own IsSelected and a tap handler assigns the
+          ViewModel's Selected, where the WPF ListView does both for free.
+    -->
+
+    <Grid Padding="12" RowSpacing="10" ColumnSpacing="12"
+          Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- header -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="14">
+            <TextBlock Text="Fleet" FontSize="18" FontWeight="SemiBold" />
+            <TextBlock Text="{x:Bind ViewModel.ConnectionSummary, Mode=OneWay}"
+                       Opacity="0.7" VerticalAlignment="Center" FontSize="12" />
+        </StackPanel>
+
+        <!-- aggregates -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+            <Border Padding="10,6" CornerRadius="6" BorderThickness="1"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                <StackPanel>
+                    <TextBlock Text="{x:Bind ViewModel.Total, Mode=OneWay}" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="DEVICES" FontSize="10" Opacity="0.6" />
+                </StackPanel>
+            </Border>
+            <Border Padding="10,6" CornerRadius="6" BorderThickness="1"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                <StackPanel>
+                    <TextBlock Text="{x:Bind ViewModel.Online, Mode=OneWay}" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="ONLINE" FontSize="10" Opacity="0.6" />
+                </StackPanel>
+            </Border>
+            <Border Padding="10,6" CornerRadius="6" BorderThickness="1"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                <StackPanel>
+                    <TextBlock Text="{x:Bind ViewModel.Offline, Mode=OneWay}" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="OFFLINE" FontSize="10" Opacity="0.6" />
+                </StackPanel>
+            </Border>
+            <Border Padding="10,6" CornerRadius="6" BorderThickness="1"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                <StackPanel>
+                    <TextBlock Text="{x:Bind ViewModel.Alerting, Mode=OneWay}" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="ALERTING" FontSize="10" Opacity="0.6" />
+                </StackPanel>
+            </Border>
+            <Border Padding="10,6" CornerRadius="6" BorderThickness="1"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                <StackPanel>
+                    <TextBlock Text="{x:Bind ViewModel.Gaps, Mode=OneWay}" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="GAPS" FontSize="10" Opacity="0.6" />
+                </StackPanel>
+            </Border>
+            <Border Padding="10,6" CornerRadius="6" BorderThickness="1"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                <StackPanel>
+                    <TextBlock Text="{x:Bind ViewModel.StaleDropped, Mode=OneWay}" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="STALE" FontSize="10" Opacity="0.6" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+
+        <!-- filters. Two-way, so the ViewModel's filter state is the single source of truth -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="12">
+            <TextBox Width="260" PlaceholderText="device, site or firmware"
+                     Text="{x:Bind ViewModel.Search, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            <CheckBox Content="online only" IsChecked="{x:Bind ViewModel.OnlineOnly, Mode=TwoWay}" />
+            <CheckBox Content="alerting only" IsChecked="{x:Bind ViewModel.AlertingOnly, Mode=TwoWay}" />
+            <Button Content="clear" Command="{x:Bind ViewModel.ClearFiltersCommand}" />
+            <TextBlock VerticalAlignment="Center" Opacity="0.6" FontSize="12"
+                       Text="{x:Bind ViewModel.Shown, Mode=OneWay}" />
+        </StackPanel>
+
+        <!-- column headers, kept outside the scroll region so they stay put -->
+        <Grid Grid.Row="3" Padding="6,4" ColumnSpacing="8" Opacity="0.6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="130" />
+                <ColumnDefinition Width="80" />
+                <ColumnDefinition Width="90" />
+                <ColumnDefinition Width="80" />
+                <ColumnDefinition Width="70" />
+                <ColumnDefinition Width="70" />
+                <ColumnDefinition Width="70" />
+                <ColumnDefinition Width="70" />
+                <ColumnDefinition Width="80" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="DEVICE" FontSize="10" />
+            <TextBlock Grid.Column="1" Text="SITE" FontSize="10" />
+            <TextBlock Grid.Column="2" Text="STATUS" FontSize="10" />
+            <TextBlock Grid.Column="3" Text="FIRMWARE" FontSize="10" />
+            <TextBlock Grid.Column="4" Text="°C" FontSize="10" />
+            <TextBlock Grid.Column="5" Text="RH%" FontSize="10" />
+            <TextBlock Grid.Column="6" Text="VOLTS" FontSize="10" />
+            <TextBlock Grid.Column="7" Text="RSSI" FontSize="10" />
+            <TextBlock Grid.Column="8" Text="SEQ" FontSize="10" />
+            <TextBlock Grid.Column="9" Text="LAST EVENT" FontSize="10" />
+        </Grid>
+
+        <!-- grid. ItemsRepeater virtualises: only rows in view are realised -->
+        <ScrollViewer Grid.Row="4" VerticalScrollBarVisibility="Auto">
+            <ItemsRepeater x:Name="DeviceGrid" ItemsSource="{x:Bind ViewModel.Devices, Mode=OneWay}">
+                <ItemsRepeater.Layout>
+                    <StackLayout Spacing="0" />
+                </ItemsRepeater.Layout>
+                <ItemsRepeater.ItemTemplate>
+                    <DataTemplate x:DataType="vm:DeviceViewModel">
+                        <!-- Transparent rather than unset, so a tap anywhere on the row is
+                             seen and not just a tap that lands on text. -->
+                        <Grid Padding="6,3" ColumnSpacing="8" Height="26" Background="Transparent"
+                              Tapped="OnRowTapped">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="130" />
+                                <ColumnDefinition Width="80" />
+                                <ColumnDefinition Width="90" />
+                                <ColumnDefinition Width="80" />
+                                <ColumnDefinition Width="70" />
+                                <ColumnDefinition Width="70" />
+                                <ColumnDefinition Width="70" />
+                                <ColumnDefinition Width="70" />
+                                <ColumnDefinition Width="80" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Selection highlight. Drawn behind the cells and driven by
+                                 per-row state, so recycling a scrolled-away row cannot lose
+                                 it. -->
+                            <Border Grid.Column="0" Grid.ColumnSpan="10" Margin="-6,-3"
+                                    Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                    Opacity="0.22" CornerRadius="3"
+                                    Visibility="{x:Bind local:Vis.When(IsSelected), Mode=OneWay}" />
+
+                            <TextBlock Grid.Column="0" Text="{x:Bind DeviceId}" FontFamily="Consolas" FontSize="12" />
+                            <TextBlock Grid.Column="1" Text="{x:Bind Site, Mode=OneWay}" FontSize="12" />
+                            <TextBlock Grid.Column="2" FontSize="12"
+                                       Text="{x:Bind OfflineReason, Mode=OneWay, FallbackValue=online}" />
+                            <TextBlock Grid.Column="3" Text="{x:Bind Firmware, Mode=OneWay}" FontSize="12" />
+                            <TextBlock Grid.Column="4" Text="{x:Bind Temperature, Mode=OneWay}" FontFamily="Consolas" FontSize="12" />
+                            <TextBlock Grid.Column="5" Text="{x:Bind Humidity, Mode=OneWay}" FontFamily="Consolas" FontSize="12" />
+                            <TextBlock Grid.Column="6" Text="{x:Bind Voltage, Mode=OneWay}" FontFamily="Consolas" FontSize="12" />
+                            <TextBlock Grid.Column="7" Text="{x:Bind Signal, Mode=OneWay}" FontFamily="Consolas" FontSize="12" />
+                            <TextBlock Grid.Column="8" Text="{x:Bind Seq, Mode=OneWay}" FontFamily="Consolas" FontSize="12" Opacity="0.6" />
+                            <TextBlock Grid.Column="9" Text="{x:Bind LastEvent, Mode=OneWay}" FontSize="12" />
+                        </Grid>
+                    </DataTemplate>
+                </ItemsRepeater.ItemTemplate>
+            </ItemsRepeater>
+        </ScrollViewer>
+
+        <!--
+            Detail for the selected device, docked beside the grid rather than opened as a
+            second window: the fleet view stays visible and keeps updating while one device is
+            being read, which is the point of watching a fleet.
+
+            The panel is not rebuilt per selection. It binds to one long-lived
+            DeviceDetailViewModel whose contents change, so its bindings stay attached.
+        -->
+        <local:DetailPanel x:Name="DetailPane" Grid.Row="0" Grid.RowSpan="5" Grid.Column="1"
+                           Visibility="{x:Bind local:Vis.When(ViewModel.HasSelection), Mode=OneWay}" />
+    </Grid>
+</Window>

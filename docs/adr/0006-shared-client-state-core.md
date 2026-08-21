@@ -100,6 +100,39 @@ in every host. `FleetStore` therefore raises **batched** collection and aggregat
 notifications aligned to the delta cadence, never one notification per changed field. This
 constraint applies equally to the MVVM and the signals consumers.
 
+## Revision history
+
+The decision — share the state, not the binding style — held. Three details of it did not
+survive implementation, and are recorded here rather than edited above.
+
+**The core is at `clients/dotnet/Fleet.Client.Core`.** The path in the Decision section
+predates the grouping of clients by runtime family.
+
+**Filter, sort and selection are not in the core.** They were specified as `FleetStore`
+state and implemented one layer up instead, because they are view state, not fleet state:
+two clients open side by side disagree about what is filtered and what is selected, and a
+shared store would have to arbitrate between them for no benefit. `Fleet.Client.Xaml` holds
+them for the XAML hosts and `FleetView` holds them for Blazor. The core kept exactly what is
+genuinely common — the device collection, aggregates, cadence, and frame counters. The
+reconciliation semantics, which is what the sharing was for, are unaffected.
+
+**Command dispatch with `cmdId` correlation and the DI registration extensions are not
+built.** There are no device commands yet, so the client is read-only and the correlation
+machinery would have nothing to correlate.
+
+One thing the ADR did not anticipate improved the outcome. It assumed one shared library
+under several idiomatic clients; implementation produced two, because WinUI 3 and WPF want
+the *same* idiom. `Fleet.Client.Xaml` holds `CommunityToolkit.Mvvm` ViewModels — filtering,
+sorting, selection, in-place frame application, device detail — and both XAML hosts consume
+it unchanged, contributing only a dispatcher and their own XAML. That is a stronger form of
+the same argument: sharing is bounded by what genuinely agrees, and here two frameworks agree
+about more than the ADR expected. It also makes the claim testable, which a single XAML host
+could not have done — `Fleet.Client.Xaml.Tests` runs the ViewModels with an inline dispatcher
+and no UI thread at all.
+
+The batched-notification constraint in the Notes was implemented as specified: `FleetStore`
+raises one `Changed` event per applied frame, never one per changed field.
+
 ## Supersedes
 
 An earlier draft of this ADR proposed reusing one set of `INotifyPropertyChanged`

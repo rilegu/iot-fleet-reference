@@ -6,7 +6,7 @@ to a broker, an ingest and API tier that turns that stream into queryable fleet 
 a set of interchangeable desktop/web dashboards built on **one shared contract**.
 
 The distinguishing goal is that the *same* dashboard is implemented across several UI
-stacks — Blazor/ASP.NET Core, WinUI 3, Qt/QML, Electron, and later Flutter — against a
+stacks — Blazor/ASP.NET Core, WinUI 3, WPF, Qt/QML, Electron, and later Flutter — against a
 frozen, language-neutral API. Adding a new UI framework must never require touching the
 backend.
 
@@ -21,7 +21,7 @@ backend.
 | G1 | Simulate 1000 devices (headroom to 10k) with realistic behaviour, faults, and lifecycle |
 | G2 | End-to-end production practices: TLS, per-device identity, ACLs, authn/authz, audit, observability, CI |
 | G3 | A language-neutral contract that any UI framework can consume without backend changes |
-| G4 | Implement each client in its ecosystem's idiomatic view-state style — MVVM in WinUI 3, signals and unidirectional flow on the web, Model/View in Qt — over one shared .NET state core |
+| G4 | Implement each client in its ecosystem's idiomatic view-state style — MVVM in the XAML hosts, signals and unidirectional flow on the web, Model/View in Qt — over one shared .NET state core |
 | G5 | Use each language where it fits and record why: Go, C, Python, C#, C++/QML, TypeScript |
 | G6 | Render 1000 live-updating devices at interactive frame rates |
 | G7 | Produce a measured, reproducible comparison of the UI stacks under identical load |
@@ -181,8 +181,11 @@ speaks a snapshot/delta protocol:
    ingest rate, p50/p95 telemetry latency).
 4. Per-connection outbound queues **coalesce last-write-wins per device**. A slow client
    receives fewer, larger deltas — never a growing backlog.
-5. Opening a device detail view creates a second, higher-rate subscription scoped to that
-   device only.
+5. Opening a device detail view does **not** open a second subscription. Its live fields come
+   from the device the client already holds, and its history and events are one-shot REST
+   reads issued once per selection. A per-device high-rate channel was the original design and
+   was dropped: it duplicates data the client has, and the aggregates the panel charts come
+   from continuous aggregates the realtime channel does not carry anyway.
 
 This bounds client work by *viewport and cadence*, not by fleet size, which is what makes a
 fair cross-framework comparison possible at all. Clients still virtualize their grids; the
@@ -202,24 +205,39 @@ is genuinely shareable:
 
 - `FleetConnection` — REST + WebSocket transport, reconnect with jitter, resilience
   pipelines, snapshot/delta reconciliation.
-- `FleetStore` — the observable fleet state: device collection, filtering, sorting,
-  selection, derived aggregates. Exposes both a change-notification stream and immutable
-  snapshots, so either binding style can sit on top.
-- Command dispatch with `cmdId` correlation and optimistic/settled state.
-- `Microsoft.Extensions.DependencyInjection` registration extensions.
+- `FleetStore` — the observable fleet state: the device collection, derived aggregates,
+  cadence and frame counters. It exposes both a change event and immutable snapshots, so
+  either binding style can sit on top.
+
+Filtering, sorting and selection are deliberately *not* in the core. They are view state:
+each client's grid has its own notion of what is visible and what is selected, and two
+clients open side by side should not share it. For the XAML hosts they live in
+`Fleet.Client.Xaml`; Blazor keeps its own in `FleetView`.
+
+Command dispatch with `cmdId` correlation is not implemented — there are no device commands
+yet, so the client is read-only.
+
+Between the core and the two XAML hosts sits a second shared layer,
+`clients/dotnet/Fleet.Client.Xaml`: `CommunityToolkit.Mvvm` ViewModels holding filtering,
+sorting, selection, in-place frame application and the device detail panel. Each host
+supplies an `IUiDispatcher` and its own XAML, and nothing else. The layer stops at the point
+where the two frameworks stop agreeing — the detail sparkline is computed there as normalised
+vertices, because WPF and WinUI draw with different and mutually unavailable geometry types,
+and each host scales those vertices onto its own canvas in about a dozen lines.
 
 On top of that core:
 
 | Client | Idiom | Notes |
 |---|---|---|
 | **WinUI 3** | **MVVM** — `CommunityToolkit.Mvvm` ViewModels over `FleetStore`, bound with `x:Bind` | The idiomatic and effectively mandatory pattern for XAML. |
+| **WPF** | **MVVM** — the same ViewModels, bound with classic `Binding` | Shares `Fleet.Client.Xaml` with WinUI unchanged, which is what makes the reuse claim checkable rather than asserted. |
 | **Blazor** | Store subscription + `InvokeAsync(StateHasChanged)` | Blazor's native idiom, not `INotifyPropertyChanged`. Reuses transport, reconciliation and query logic. |
 | **Qt/QML** | Model/View — `QAbstractTableModel` + `Q_PROPERTY` | Qt's own terminology and structure. |
 | **Electron** | Signals/observable store + virtualized grid | The mainstream web idiom. |
 | **Flutter** | `ChangeNotifier` or Riverpod | Whichever the comparison finds cleaner. |
 
 The reuse that matters — transport, reconnect, snapshot/delta reconciliation, filter/sort/
-aggregate semantics — is shared between the two .NET clients regardless of binding style,
+aggregate semantics — is shared across all three .NET clients regardless of binding style,
 and is the part most likely to develop subtle divergence if duplicated.
 
 The deliverable is a documented, comparative answer to "how does each of these ecosystems
@@ -245,18 +263,23 @@ runtime family:
 clients/
   dotnet/
     Fleet.Client.Core/    transport, reconciliation, FleetStore    <- shared code
-    Fleet.Client.Xaml/    MVVM ViewModels                          <- shared by XAML hosts only
-    winui/                thin: XAML + DI wiring
-    wpf/       (optional) thin: XAML + DI wiring
+    Fleet.Client.Xaml/    MVVM ViewModels, device detail            <- shared by XAML hosts only
+    winui/                thin: XAML + dispatcher
+    wpf/                  thin: XAML + dispatcher
     blazor/               consumes FleetStore directly, no ViewModels
+    *.Tests/              reconciliation and ViewModel tests
   qt/                     C++  — own implementation
   electron/               TS   — own implementation
   flutter/                Dart — own implementation
 ```
 
-Adding WPF is close to free and worth doing: the same ViewModels running unchanged on both
-WPF and WinUI 3 is the most direct available proof that the MVVM layer is genuinely
-view-agnostic.
+Running the same ViewModels unchanged on both WPF and WinUI 3 is what makes the MVVM layer
+demonstrably view-agnostic rather than nominally so, and it was cheap: each host contributes
+roughly seventy lines of C# plus its own XAML. It also priced the differences honestly. WPF
+gets selection and row highlighting from `ListView`; WinUI's `ItemsRepeater` has no selection
+model, so the row carries its own flag and a tap handler resolves it by index — a repeater
+whose template uses `x:Bind` never sets `DataContext` on the realised row. Neither difference
+reaches the ViewModels, which is the point.
 
 ### Reuse is deliberately not maximised
 
@@ -274,13 +297,16 @@ Five independent implementations of snapshot/delta reconciliation is five opport
 subtle, divergent bugs. This is handled the same way as the device contract — with tests
 rather than trust.
 
-`contracts/vectors/` holds **golden reconciliation vectors**: language-neutral JSON
+`contracts/vectors/` will hold **golden reconciliation vectors**: language-neutral JSON
 fixtures of `(snapshot, delta stream) -> expected final state`, including reordering, gap
 detection, resubscribe-after-drop, and coalescing edge cases. Every client's reconciler runs
-them in its own test suite. A client that cannot reproduce the expected state fails CI.
-
-This converts "shared spec" from an intention into something enforced, which is what makes
+them in its own test suite, and a client that cannot reproduce the expected state fails CI.
+That converts "shared spec" from an intention into something enforced, which is what makes
 deliberate duplication safe.
+
+It is not built yet, and it does not bind until a second runtime exists to disagree with the
+first. Until then the .NET reconciler is pinned by `Fleet.Client.Core.Tests`, and the
+semantics those tests fix are what the vectors will encode.
 
 > **Licensing note:** the Qt MQTT add-on is GPL-3.0/commercial, not LGPL. Since all clients
 > talk to `fleet-api` over WebSocket (Qt WebSockets, LGPL) rather than to the broker
@@ -340,6 +366,9 @@ Not deferred to "later" — it is a stated goal, and it is what separates this f
 
 ## 12. Repository layout
 
+The target layout. What exists today is in the status table in the
+[README](../README.md#status); everything else below is where it will go.
+
 ```
 contracts/              OpenAPI - AsyncAPI - JSON Schema (source of truth)
   vectors/              golden reconciliation vectors, run by every client
@@ -354,9 +383,10 @@ services/                                                   [Linux containers]
 clients/                                                    [native Windows]
   dotnet/
     Fleet.Client.Core/  transport, reconciliation, FleetStore
-    Fleet.Client.Xaml/  MVVM ViewModels, shared by the XAML hosts
-    winui/  wpf/        thin XAML + DI wiring
+    Fleet.Client.Xaml/  MVVM ViewModels and device detail, shared by the XAML hosts
+    winui/  wpf/        thin XAML + dispatcher
     blazor/             consumes FleetStore directly
+    *.Tests/            reconciliation and ViewModel tests
   qt/  electron/  flutter/
 tools/                  Python: conformance suite, load orchestration, analysis
 docs/
@@ -369,13 +399,15 @@ docs/
 
 ### Scale ladder
 
-Fleet size is a dial, not a constant. Three profiles ship in `devices/scenarios/`:
+Fleet size is a dial, not a constant. Three profiles are planned, in `devices/scenarios/`.
+Today the count is set directly on the simulator, and the `demo` figure is what the running
+stack uses:
 
 | Profile | Devices | Purpose |
 |---|---|---|
 | `dev` | 200 | Fast iteration. Compose comes up in seconds. |
 | `demo` | 1 000 | The headline configuration and the target for all published measurements. |
-| `stress` | 10 000 | Multiple simulator replicas, partitioned ingest. **A committed deliverable, not an option** — it is what makes the service split in [ADR-0002](adr/0002-ingest-api-split.md) load-bearing rather than speculative. Results are published in `docs/scale-testing.md`. |
+| `stress` | 10 000 | Multiple simulator replicas, partitioned ingest. **A committed deliverable, not an option** — it is what makes the service split in [ADR-0002](adr/0002-ingest-api-split.md) load-bearing rather than speculative. Results will be published in `docs/scale-testing.md`. |
 
 ### Why 1000 is the right headline number
 
@@ -409,8 +441,8 @@ candidate framework handles that comfortably. **This is a protocol design proble
 capacity problem**, and the fix is a few hundred lines in the API.
 
 A consequence worth planning for: because all frameworks cope easily at 4 Hz, a
-single-cadence comparison would be uninformative. The comparison in `ui-comparison.md`
-therefore **sweeps the delta cadence** — 4 Hz, 10 Hz, 30 Hz, and uncoalesced — and reports
+single-cadence comparison would be uninformative. The comparison, when written up in
+`ui-comparison.md`, therefore **sweeps the delta cadence** — 4 Hz, 10 Hz, 30 Hz, and uncoalesced — and reports
 where each framework's frame time degrades. That breaking point is the interesting result.
 
 ### Targets
