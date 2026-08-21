@@ -1,6 +1,12 @@
-# Broker, simulated fleet, telemetry storage, event log and the ingest service.
+# Broker, simulated fleet, telemetry storage, event log, ingest and the API.
 #
-# The API and the real dashboard are not built yet.
+# By default the API is left out, so it can be run on the host with a debugger attached
+# while everything it depends on runs in containers:
+#
+#   docker compose up -d                  broker, fleet, database, log, ingest
+#   docker compose --profile full up -d   the above plus the API
+#
+# The dashboard is not built yet.
 
 name: iot-fleet
 
@@ -117,6 +123,36 @@ services:
       INGEST_SITES: ""
     ports:
       - "9101:9101"
+
+  fleet-api:
+    # Only started with --profile full. Left out by default so the inner loop can run the
+    # API on the host against containerized infrastructure.
+    profiles: ["full"]
+    build:
+      context: ..
+      dockerfile: services/api/Dockerfile
+    image: iot-fleet/api:dev
+    container_name: fleet-api
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    environment:
+      Log__Url: nats://nats:4222
+      Log__Stream: FLEET
+      Log__Consumer: fleet-api
+      Database__Url: "Host=timescaledb;Port=5432;Database=fleet;Username=fleet;Password=fleet"
+    ports:
+      - "8080:8080"
+    healthcheck:
+      # readyz, not healthz: a replaying instance is alive but must not serve a partial fleet.
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/readyz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
 volumes:
   mosquitto-data:

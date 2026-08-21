@@ -101,15 +101,34 @@ discovering.
 
 The API's in-memory projection is a cache, never the source of truth. On start:
 
-1. Load the last projection checkpoint — device state plus the NATS stream sequence it
-   reflects — from TimescaleDB.
-2. Replay JetStream from that sequence forward.
-3. Serve traffic once caught up; report `not ready` until then, so a restarting instance
+1. **Seed the floor from TimescaleDB.** One `DISTINCT ON (device_id)` query over
+   `device_status` yields the last known identity and presence of every device that has ever
+   reported. Seeded devices are marked as a baseline rather than a live observation, so the
+   first real message for each does not register as a sequence gap.
+2. **Replay the log from the durable consumer's position.** The consumer's acknowledgement
+   floor *is* the checkpoint: JetStream stores it server-side, so a restart resumes exactly
+   where the previous instance stopped acknowledging.
+3. **Serve traffic once caught up**; report `not ready` until then, so a restarting instance
    never serves a partial fleet.
 
-Checkpoints are written periodically and on graceful shutdown. Because apply is idempotent,
-an over-replay from a stale checkpoint is harmless — which is precisely why checkpointing
-can be cheap and asynchronous.
+There is no separate checkpoint table, and none is needed. A durable consumer already
+records a per-consumer position, and the database already holds device state — writing a
+third copy on a timer would add a component whose staleness has to be reasoned about,
+to duplicate what two existing components track exactly.
+
+**Why the seed exists at all.** The stream has a finite `MaxAge`. Replay alone recovers any
+device that reported inside the retention window, which in normal operation is the entire
+fleet. A device silent for longer than that has no messages left to replay and would be
+absent from the projection entirely. The database has no such horizon, so it supplies the
+floor and the log brings it current.
+
+The seed reads presence and identity only, never telemetry: metrics arrive from the log
+within a second, and a latest-row-per-device query against the hypertable costs far more
+than the bounded query over `device_status`.
+
+Because apply is idempotent, seeding and then over-replaying is harmless — which is what
+makes this cheap enough to do unconditionally on every start. A failed seed is logged and
+degrades to replay-only rather than preventing startup.
 
 **Failure case this closes:** the API acknowledges a JetStream message and crashes before
 updating the projection. Acknowledgement happens *after* apply, so the message is
@@ -204,6 +223,13 @@ produce it.
   tracing is the risk this ADR exists to remove.
 
 ## Revision history
+
+Projection recovery originally specified a bespoke checkpoint table in TimescaleDB holding
+device state plus a stream sequence, written periodically. Implementing it showed the
+checkpoint was redundant: JetStream already tracks a durable consumer's acknowledgement
+position, and the database already holds device state. What the checkpoint was really
+protecting against — a device silent longer than the stream's retention — is closed by
+seeding from `device_status` at startup, with no third copy of the state to keep current.
 
 The delivery table originally specified a single `ingest → TimescaleDB` hop with duplicate
 writes collapsing on `(device_id, seq)`. Implementing it showed that a hypertable cannot

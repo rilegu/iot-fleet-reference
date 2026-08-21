@@ -1,5 +1,14 @@
 .git
+.github
 *.md
-bin/
-obj/
+
+# Build output. These must use **/ : a bare "bin/" matches only the repository root, so
+# services/api/obj would still be copied in and would overwrite the restore performed
+# inside the image with one that references host paths.
+**/bin/
+**/obj/
+
+# Not part of any image.
 services/api-spike/
+services/api.tests/
+docs/

@@ -1,6 +1,8 @@
 package main
 
 import (
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -93,6 +95,23 @@ func randomHex(r *rand.Rand, n int) string {
 		b[i] = hexDigits[r.Intn(16)]
 	}
 	return string(b)
+}
+
+// newBootID returns an identifier for this boot.
+//
+// Deliberately NOT drawn from the seeded generator. A boot id identifies a process
+// lifetime, so it must differ on every start even when --seed is fixed. Deriving it from
+// the seed makes a restart indistinguishable from a continuation: the sequence number
+// resets to 1 while the boot id stays the same, and every consumer applying the
+// (boot_id, seq) ordering rule then discards the entire new session as stale.
+func newBootID() string {
+	b := make([]byte, 8)
+	if _, err := cryptorand.Read(b); err != nil {
+		// Fall back to the clock rather than to the seeded generator, which would
+		// reintroduce the very collision this exists to avoid.
+		return fmt.Sprintf("%016x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
 
 // newTraceparent builds a W3C trace context header value. MQTT 3.1.1 has no user

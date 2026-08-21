@@ -84,8 +84,8 @@ does not justify.
 - **JetStream is real infrastructure**: stream configuration, retention, consumer
   acknowledgement, redelivery, duplicate handling.
 - **A heavier inner loop.** Debugging `fleet-api` on the Windows host requires broker,
-  database, ingest and NATS running. The `infra` Compose profile
-  ([ADR-0007](0007-linux-containers-windows-dashboards.md)) exists for this.
+  database, ingest and NATS running. Compose leaves the API out by default precisely so
+  that combination is one command ([ADR-0007](0007-linux-containers-windows-dashboards.md)).
 - **Ingest is written in Go**, so any logic prototyped in C# while validating the contract
   is discarded. That early consumer is explicitly a spike, not an architectural starting
   point.

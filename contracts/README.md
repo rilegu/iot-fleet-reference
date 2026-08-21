@@ -10,7 +10,7 @@
 ```
 fleet/{site}/{deviceId}/telemetry      QoS 0, device -> cloud, high rate
 fleet/{site}/{deviceId}/status         QoS 1, retained, LWT-backed
-fleet/{site}/{deviceId}/event          QoS 1, not yet implemented
+fleet/{site}/{deviceId}/event          QoS 1, faults and threshold crossings
 fleet/{site}/{deviceId}/cmd            QoS 1, cloud -> device, not yet implemented
 fleet/{site}/{deviceId}/cmd/ack        QoS 1, device -> cloud, not yet implemented
 ```

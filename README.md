@@ -23,10 +23,11 @@ to prove that a new UI framework requires no backend change.
 
 ## Status
 
-The ingest path works end to end: a simulated fleet publishes over MQTT, ingest validates
-every payload against the schemas in `contracts/`, and writes it to TimescaleDB and a
-durable NATS JetStream log. The API and the real dashboard do not exist yet, so what
-currently reads the fleet is a throwaway viewer.
+The backend works end to end: a simulated fleet publishes over MQTT, ingest validates every
+payload against the schemas in `contracts/` and writes it to TimescaleDB and a durable NATS
+JetStream log, and the API projects that log into live fleet state served over REST and a
+coalesced WebSocket channel. No real dashboard exists yet — the only client is a throwaway
+viewer that bypasses the pipeline entirely.
 
 **Legend:** ✅ working · 🚧 in progress · ⬜ not started
 
@@ -41,8 +42,8 @@ currently reads the fleet is a throwaway viewer.
 | Ingest service (Go) | ✅ | Schema validation, bounded queues with counted drops, batched writes, dead-lettering |
 | Telemetry history (TimescaleDB) | ✅ | Hypertable, 1-minute continuous aggregates, retention and compression policies |
 | Event log (NATS JetStream) | ✅ | Durable and replayable; carries the payload verbatim with ingest metadata in headers |
-| Fleet API (REST + WebSocket) | ⬜ | Fleet projection, queries, commands |
-| Snapshot/delta protocol | ⬜ | Coalesced deltas with per-connection backpressure |
+| Fleet API (REST + WebSocket) | ✅ | Log-driven projection with `(boot_id, seq)` ordering, replay on restart, REST queries, history from continuous aggregates |
+| Snapshot/delta protocol | 🚧 | Snapshot plus coalesced per-device deltas at a client-capped cadence; field-level deltas and per-connection backpressure still to come |
 | Device agent (C99) | ⬜ | Constrained-device implementation of the same contract |
 
 ### Dashboards
@@ -61,6 +62,7 @@ currently reads the fleet is a throwaway viewer.
 
 | Concern | Status | Notes |
 |---|:--:|---|
+| Projection replay on restart | ✅ | Durable log consumer; readiness withheld until the backlog is drained |
 | Contract codegen + CI drift check | ⬜ | |
 | TLS, per-device identity, broker ACLs | ⬜ | |
 | API authentication, authorization, audit | ⬜ | |
@@ -184,15 +186,44 @@ are treated as data rather than control.
 From the repository root:
 
 ```bash
-docker compose -f deploy/compose.yaml up -d --build
+docker compose -f deploy/compose.yaml --profile full up -d --build
 ```
 
-That brings up the broker, a simulated fleet, TimescaleDB, NATS JetStream and the ingest
-service. Ingest exposes counters, which are the fastest way to see the pipeline working:
+That brings up the broker, a simulated fleet, TimescaleDB, NATS JetStream, the ingest
+service and the API. Omit `--profile full` to leave the API out and run it on your machine
+with a debugger attached:
+
+```bash
+docker compose -f deploy/compose.yaml up -d      # everything except the API
+dotnet run --project services/api                # http://localhost:5200
+```
+
+The API refuses traffic until it has replayed the log, so `readyz` is the signal to watch,
+not `healthz` — a restarting instance is alive long before it can serve a complete fleet:
+
+```bash
+curl -s http://localhost:8080/readyz
+curl -s http://localhost:8080/stats
+curl -s "http://localhost:8080/api/fleet?limit=3"
+curl -s "http://localhost:8080/api/devices/dev-000000/history?minutes=30"
+curl -s "http://localhost:8080/api/events?limit=5"
+```
+
+`stale_dropped` counts messages the projection rejected as duplicates or reorderings, and
+`gaps` counts detected sequence jumps. Both should sit near zero on a healthy pipeline.
+
+The realtime channel is a WebSocket at `/ws/fleet`. It sends one snapshot, then coalesced
+deltas containing only devices that changed:
+
+```bash
+# a client may request a slower cadence, never a faster one
+# {"type":"subscribe","max_rate_hz":4}
+```
+
+Ingest exposes its own counters separately:
 
 ```bash
 curl -s http://localhost:9101/stats
-curl -s http://localhost:9101/readyz
 ```
 
 `invalid`, `telemetry_dropped`, `write_failures`, `publish_failures` and `unacknowledged`
@@ -304,9 +335,10 @@ devices/
   agent-c/              C99 reference device agent                           (planned)
   scenarios/            fault injection and lifecycle definitions            (planned)
 services/
-  api-spike/            throwaway viewer, replaced by the API and a real dashboard
+  api-spike/            throwaway viewer, replaced once a real dashboard exists
   ingest/               Go ingest service
-  api/                  .NET 10 API service                                  (planned)
+  api/                  .NET 10 API service
+  api.tests/            projection ordering and idempotency tests
 clients/                                                                     (planned)
   dotnet/               shared state core, XAML ViewModels, WinUI, WPF, Blazor
   qt/  electron/  flutter/

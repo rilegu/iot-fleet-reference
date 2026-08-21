@@ -37,10 +37,10 @@ required to run on Windows.
 Running the whole stack in containers is the demo and CI topology, not a constraint on
 day-to-day work. Two Compose profiles:
 
-| Profile | Contents | Use |
+| Invocation | Contents | Use |
 |---|---|---|
-| `full` | everything, including `fleet-api` | demo, CI, measurement runs |
-| `infra` | broker, datastore, bus, simulator only | inner loop — run `fleet-api` on the Windows host with hot reload and a debugger attached |
+| `docker compose up` | broker, datastore, log, simulator, ingest | inner loop — run `fleet-api` on the Windows host with hot reload and a debugger attached |
+| `docker compose --profile full up` | the above plus `fleet-api` | demo, CI, measurement runs |
 
 The service reads the same configuration in both modes; only connection endpoints differ.
 This is the standard pattern for containerized development and keeps `F5` debugging of the
@@ -93,7 +93,7 @@ than Windows runners. Only the Windows dashboard builds need a Windows runner.
 | The WSL2 port-forward sits between dashboards and `fleet-api` | It is identical for all five clients, so it cancels out of the comparison. A one-off calibration run against a host-resident API quantifies the offset for absolute figures. |
 | `vmmem` reserves host RAM and releases it slowly | A `.wslconfig` memory cap ships in `deploy/`. |
 | Docker Desktop requires a paid subscription for larger organizations | Free for this use. Docker Engine installed directly into the existing WSL2 Ubuntu distribution is an equivalent, licence-free fallback and is documented in `deploy/`. |
-| Debugging a containerized .NET service is worse than debugging a host process | The `infra` Compose profile exists precisely so the inner loop runs on the host. |
+| Debugging a containerized .NET service is worse than debugging a host process | Compose omits the API by default, so the inner loop runs it on the host against containerized dependencies. |
 
 ## Alternatives rejected
 
