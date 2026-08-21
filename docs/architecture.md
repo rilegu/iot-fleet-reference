@@ -10,6 +10,10 @@ stacks — Blazor/ASP.NET Core, WinUI 3, Qt/QML, Electron, and later Flutter —
 frozen, language-neutral API. Adding a new UI framework must never require touching the
 backend.
 
+> **This document describes the target design, not what is built today.** It is written in
+> the present tense throughout because it is a specification, not a progress report. For
+> what currently runs, see the [status table in the README](../README.md#status).
+
 ## 1. Goals
 
 | # | Goal |
@@ -106,8 +110,7 @@ model with the .NET clients.
 than inventing a justification. The split is load-bearing at the 10 000-device stress
 profile, where ingest and query diverge sharply and MQTT 3.1.1's lack of shared
 subscriptions forces partitioned consumers. That profile is therefore a committed
-deliverable (phase 7), not an aspiration — [ADR-0002](adr/0002-ingest-api-split.md) depends
-on it.
+deliverable, not an aspiration — [ADR-0002](adr/0002-ingest-api-split.md) depends on it.
 
 Splitting creates one hard problem: telemetry arrives at `fleet-ingest` while the state
 dashboards read lives in `fleet-api`. Duplicate delivery, reordering, and process death
@@ -367,7 +370,7 @@ Fleet size is a dial, not a constant. Three profiles ship in `devices/scenarios/
 |---|---|---|
 | `dev` | 200 | Fast iteration. Compose comes up in seconds. |
 | `demo` | 1 000 | The headline configuration and the target for all published measurements. |
-| `stress` | 10 000 | Multiple simulator replicas, partitioned ingest. **A committed deliverable (phase 7), not an option** — it is what makes the service split in [ADR-0002](adr/0002-ingest-api-split.md) load-bearing rather than speculative. Results are published in `docs/scale-testing.md`. |
+| `stress` | 10 000 | Multiple simulator replicas, partitioned ingest. **A committed deliverable, not an option** — it is what makes the service split in [ADR-0002](adr/0002-ingest-api-split.md) load-bearing rather than speculative. Results are published in `docs/scale-testing.md`. |
 
 ### Why 1000 is the right headline number
 
@@ -424,34 +427,37 @@ where each framework's frame time degrades. That breaking point is the interesti
 - Docker Desktop must have enough WSL2 memory allocated; `.wslconfig` guidance ships in
   `deploy/`.
 
-## 14. Delivery phases
+## 14. Build order
 
-Each phase is a working vertical slice, not a layer.
+The system is built as working vertical slices rather than as layers: each step produces
+something that runs end to end, not a tier waiting for the tier beneath it. Current state is
+tracked in the [status table in the README](../README.md#status).
 
-| Phase | Deliverable |
-|---|---|
-| 0 | **Contract spike.** Mosquitto + Go sim (100 devices) + throwaway .NET consumer + Blazor grid. Validates the topic and payload contract end to end. Explicitly not an architectural starting point — the ingest logic here is discarded. |
-| 1 | Contracts formalized and generated. TimescaleDB. `fleet-ingest` in Go **and NATS JetStream from the start** — the two services have no live path between them without the event log. 1000 devices. Snapshot/delta protocol with per-connection coalescing. |
-| 2 | Correctness and observability: ordering by `(boot_id, seq)`, idempotent apply, projection checkpoint and replay, bounded queues at every stage, **OpenTelemetry tracing end to end**. Then TLS, device identity, ACLs, JWT auth, and commands with ack correlation. |
-| 3 | Chaos suite: kill ingest, kill API, kill NATS, force redelivery, reboot a device. Independent reference state computed from the database. Ingest partitioning by site prefix. |
-| 4 | `Fleet.Client.Core` + `Fleet.Client.Xaml` extracted; WinUI 3 and WPF clients proving ViewModel reuse. |
-| 5 | Qt/QML client; Electron client. |
-| 6 | C99 device agent; OTA campaigns; Python conformance suite; golden reconciliation vectors. |
-| 7 | **Stress profile delivered**: 10 000 devices, partitioned ingest, `docs/scale-testing.md` with measured ceilings and failure modes. |
-| 8 | Flutter client added with zero backend change — the proof that G3 holds. `ui-comparison.md` published. |
+The broad order is: freeze the contract, then the ingest path and storage, then correctness
+and security, then the clients, then the device agent and conformance suite, then scale
+testing, and finally the remaining UI frameworks and the published comparison.
 
-Two phases changed position relative to a merged design, and both for the same reason:
-**observability moved from late to phase 2**, because debugging an eight-hop path without
-distributed tracing is the principal risk of the split; and **the chaos suite moved to
-phase 3**, immediately after the machinery it verifies, rather than being deferred to the
-end where it would be reduced to a claim.
+Two orderings within that are deliberate and worth stating, because both invert what would
+otherwise be natural:
+
+- **Distributed tracing is built early, not late.** Debugging an eight-hop path without it
+  is the principal risk of the ingest/API split, so it is a prerequisite for that split
+  rather than a finishing touch.
+- **The chaos suite lands immediately after the recovery machinery it verifies**, rather
+  than at the end. Deferred to the end it would be reduced to a claim; built alongside, it
+  is what makes the guarantees in
+  [ADR-0008](adr/0008-delivery-semantics-and-projection-recovery.md) checkable.
+
+One consequence worth flagging for anyone reading the history: the earliest exploratory
+consumer was written in C# to validate the message contract quickly, while ingest is
+specified in Go. That code is deliberately discarded rather than grown.
 
 ## 15. Extension points
 
 The design is deliberately open at four seams:
 
 1. **New UI framework** — implement the generated client plus the WebSocket protocol. No
-   backend change. Validated by adding Flutter in phase 6.
+   backend change. Validated by adding a Flutter client last, after the API is frozen.
 2. **New device implementation** — the Go simulator, the C agent, and a future Rust
    simulator are all just implementations of the MQTT contract, validated by the same
    Python conformance suite. See [ADR-0004](adr/0004-simulator-language.md).
