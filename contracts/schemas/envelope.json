@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rilegu.github.io/iot-fleet-reference/schemas/envelope.json",
+  "title": "Message envelope",
+  "description": "Fields carried by every device message. Ordering is by (boot_id, seq); ts is data, never control.",
+  "type": "object",
+  "required": ["schema", "device_id", "site", "boot_id", "seq", "ts"],
+  "properties": {
+    "schema": {
+      "description": "Schema identifier as name/major. A consumer that does not recognise the major must reject the message rather than guess.",
+      "type": "string",
+      "pattern": "^[a-z]+/[0-9]+$"
+    },
+    "device_id": {
+      "description": "Also present in the topic, duplicated so a payload is self-describing once detached from it.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "site": {
+      "description": "Topic namespace segment. Broker ACLs and ingest partitioning are scoped by it.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "boot_id": {
+      "description": "Changes on every device restart. Together with seq it forms the ordering key.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "seq": {
+      "description": "Monotonic per boot_id across all streams from a device, starting at 1. Zero is reserved for the Last Will, which is composed before the device knows its final sequence number.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "ts": {
+      "description": "Device-local clock, RFC 3339. Data only: device clocks drift and devices reboot without a real-time clock, so this is never used for ordering or latency.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "traceparent": {
+      "description": "W3C trace context. MQTT 3.1.1 has no user properties, so it travels in the payload.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+    }
+  }
+}

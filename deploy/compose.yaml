@@ -1,7 +1,6 @@
-# Current topology: a broker and a simulated fleet.
+# Broker, simulated fleet, telemetry storage, event log and the ingest service.
 #
-# The ingest service, event log, database and API are not built yet. The .NET consumer that
-# reads this fleet today runs on the host and is throwaway.
+# The API and the real dashboard are not built yet.
 
 name: iot-fleet
 
@@ -26,7 +25,8 @@ services:
 
   fleet-sim:
     build:
-      context: ../devices/sim-go
+      context: ..
+      dockerfile: devices/sim-go/Dockerfile
     image: iot-fleet/sim-go:dev
     restart: unless-stopped
     depends_on:
@@ -34,6 +34,7 @@ services:
         condition: service_healthy
     environment:
       # Overridable from the shell: SIM_DEVICES=1000 docker compose up -d
+      SIM_PROFILE: "${SIM_PROFILE:-dev}"
       SIM_BROKER: tcp://mosquitto:1883
       SIM_DEVICES: "${SIM_DEVICES:-100}"
       SIM_SITES: "${SIM_SITES:-4}"
@@ -50,5 +51,74 @@ services:
         soft: 65536
         hard: 65536
 
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: fleet-timescaledb
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: fleet
+      POSTGRES_USER: fleet
+      POSTGRES_PASSWORD: fleet
+      # Local development only. Real credentials arrive with the security work.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - ./timescale:/docker-entrypoint-initdb.d:ro
+      - timescale-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fleet -d fleet"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: fleet-nats
+    restart: unless-stopped
+    # JetStream is what makes the log durable and replayable; without -js this is a
+    # fire-and-forget bus and the projection could not recover from a checkpoint.
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8222/healthz | grep -q ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  fleet-ingest:
+    build:
+      context: ..
+      dockerfile: services/ingest/Dockerfile
+    image: iot-fleet/ingest:dev
+    container_name: fleet-ingest
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    environment:
+      INGEST_BROKER: tcp://mosquitto:1883
+      INGEST_DATABASE_URL: postgres://fleet:fleet@timescaledb:5432/fleet
+      INGEST_NATS_URL: nats://nats:4222
+      INGEST_HTTP_ADDR: ":9101"
+      # Sites this instance owns. Empty means the whole fleet; partitioning across
+      # instances becomes necessary at stress scale because MQTT 3.1.1 has no shared
+      # subscriptions.
+      INGEST_SITES: ""
+    ports:
+      - "9101:9101"
+
 volumes:
   mosquitto-data:
+  timescale-data:
+  nats-data:

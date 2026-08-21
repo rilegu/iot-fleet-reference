@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rilegu.github.io/iot-fleet-reference/schemas/status.json",
+  "title": "Device presence and identity",
+  "description": "Published retained at QoS 1 so a consumer subscribing later immediately learns the state of every device. Also used as the Last Will, in which case seq is 0 and reason is 'lwt'.",
+  "allOf": [{ "$ref": "envelope.json" }],
+  "type": "object",
+  "required": ["schema", "device_id", "site", "boot_id", "seq", "ts", "online"],
+  "properties": {
+    "schema": { "const": "status/1" },
+    "online": { "type": "boolean" },
+    "reason": {
+      "description": "connect and shutdown are published by the device; lwt is published by the broker on its behalf after the connection drops without a DISCONNECT.",
+      "enum": ["connect", "shutdown", "lwt"]
+    },
+    "fw_version": { "type": "string", "maxLength": 32 },
+    "model": { "type": "string", "maxLength": 64 }
+  },
+  "unevaluatedProperties": false,
+  "if": {
+    "properties": { "reason": { "const": "lwt" } },
+    "required": ["reason"]
+  },
+  "then": {
+    "properties": {
+      "seq": { "const": 0 },
+      "online": { "const": false }
+    }
+  },
+  "else": {
+    "properties": { "seq": { "minimum": 1 } }
+  }
+}

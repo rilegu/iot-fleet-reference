@@ -23,9 +23,10 @@ to prove that a new UI framework requires no backend change.
 
 ## Status
 
-The message contract and the simulated fleet work end to end today. The ingest service,
-event log, database and API do not exist yet, so what currently reads the fleet is a
-throwaway consumer that exists to validate the contract against something that parses it.
+The ingest path works end to end: a simulated fleet publishes over MQTT, ingest validates
+every payload against the schemas in `contracts/`, and writes it to TimescaleDB and a
+durable NATS JetStream log. The API and the real dashboard do not exist yet, so what
+currently reads the fleet is a throwaway viewer.
 
 **Legend:** ✅ working · 🚧 in progress · ⬜ not started
 
@@ -35,11 +36,11 @@ throwaway consumer that exists to validate the contract against something that p
 |---|:--:|---|
 | MQTT broker (Mosquitto) | ✅ | Plaintext and anonymous; TLS and ACLs not yet |
 | Device simulator (Go) | ✅ | One session, client id and TCP connection per device; Last Will, retained status, seeded reproducible runs, connection flapping |
-| Message contract | 🚧 | Validated end to end and documented in [`contracts/`](contracts/README.md); not yet JSON Schema |
-| Scenario engine | ⬜ | Fault injection, lifecycle events, named fleet profiles |
-| Ingest service (Go) | ⬜ | Schema validation, normalization, dead-lettering |
-| Telemetry history (TimescaleDB) | ⬜ | Hypertables and continuous aggregates |
-| Event log (NATS JetStream) | ⬜ | Durable, replayable ingest-to-API transport |
+| Message contract | ✅ | JSON Schema (draft 2020-12) in [`contracts/schemas/`](contracts/schemas/), enforced at the ingest boundary and asserted against simulator output in tests |
+| Scenario engine | 🚧 | Named profiles and fault injection work; lifecycle events and scenario files do not |
+| Ingest service (Go) | ✅ | Schema validation, bounded queues with counted drops, batched writes, dead-lettering |
+| Telemetry history (TimescaleDB) | ✅ | Hypertable, 1-minute continuous aggregates, retention and compression policies |
+| Event log (NATS JetStream) | ✅ | Durable and replayable; carries the payload verbatim with ingest metadata in headers |
 | Fleet API (REST + WebSocket) | ⬜ | Fleet projection, queries, commands |
 | Snapshot/delta protocol | ⬜ | Coalesced deltas with per-connection backpressure |
 | Device agent (C99) | ⬜ | Constrained-device implementation of the same contract |
@@ -48,7 +49,7 @@ throwaway consumer that exists to validate the contract against something that p
 
 | Client | Status | Notes |
 |---|:--:|---|
-| Exploratory viewer | ✅ | Plain polled table, no virtualization. [Throwaway](services/api-spike/README.md) |
+| Exploratory viewer | ✅ | Plain polled table reading MQTT directly, bypassing the pipeline. [Throwaway](services/api-spike/README.md) |
 | Blazor | ⬜ | |
 | WinUI 3 | ⬜ | |
 | WPF | ⬜ | Shares ViewModels with WinUI 3 |
@@ -178,56 +179,83 @@ are treated as data rather than control.
 
 ## Running it
 
-**Requirements:** Docker with Compose, and the .NET 10 SDK for the dashboard.
+**Requirements:** Docker with Compose. The .NET 10 SDK only for the throwaway viewer.
 
 From the repository root:
 
 ```bash
-# Broker + 100 simulated devices
 docker compose -f deploy/compose.yaml up -d --build
-
-# Viewer, in a second shell
-dotnet run --project services/api-spike
-#   http://localhost:5183
 ```
 
-Devices appear within a couple of seconds. A small percentage are dropped ungracefully
-every 20 seconds so the broker publishes their Last Will and they flip to `lwt` — that is
-the presence path working, not a fault.
-
-Fleet size and behaviour are environment variables, all overridable from the shell:
+That brings up the broker, a simulated fleet, TimescaleDB, NATS JetStream and the ingest
+service. Ingest exposes counters, which are the fastest way to see the pipeline working:
 
 ```bash
-SIM_DEVICES=1000 SIM_RATE=500ms docker compose -f deploy/compose.yaml up -d
+curl -s http://localhost:9101/stats
+curl -s http://localhost:9101/readyz
 ```
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `SIM_DEVICES` | `100` | Devices to simulate, one MQTT connection each |
-| `SIM_SITES` | `4` | Sites to spread devices across, used in the topic namespace |
-| `SIM_RATE` | `1s` | Telemetry interval per device |
-| `SIM_SEED` | `1` | RNG seed; the same seed reproduces a run exactly |
-| `SIM_FLAP_PCT` | `2` | Percent of devices dropped ungracefully each interval |
-| `SIM_FLAP_INTERVAL` | `20s` | How often that happens |
+`invalid`, `telemetry_dropped`, `write_failures`, `publish_failures` and `unacknowledged`
+should all stay at zero. Every drop is counted rather than silent, because silent loss is
+what makes a dashboard confidently wrong.
 
-Watching the wire directly is often more informative than the viewer:
+`unacknowledged` is the one to watch: it counts QoS 1 messages ingest deliberately refused
+to acknowledge because it could not persist them. Those are not lost — the broker
+redelivers them on the next session — but a rising value means the pipeline is failing to
+keep up with state transitions.
+
+Querying what landed:
+
+```bash
+docker exec fleet-timescaledb psql -U fleet -d fleet -c   "SELECT count(*) FROM telemetry;"
+
+docker exec fleet-timescaledb psql -U fleet -d fleet -c   "SELECT kind, severity, count(*) FROM device_event GROUP BY 1,2 ORDER BY 3 DESC;"
+
+# Dashboard rollups come from continuous aggregates, not raw scans
+docker exec fleet-timescaledb psql -U fleet -d fleet -c   "SELECT bucket, site, devices_reporting, samples FROM fleet_1m ORDER BY bucket DESC LIMIT 8;"
+```
+
+A small percentage of devices are dropped ungracefully every interval so the broker
+publishes their Last Will, and faults are injected into sensor readings — both are the
+pipeline being exercised, not a malfunction.
+
+### Fleet size and behaviour
+
+The simulator resolves settings from a named profile, then environment variables, then
+flags. A profile is a starting point, not a straitjacket:
+
+```bash
+SIM_PROFILE=demo docker compose -f deploy/compose.yaml up -d      # 1000 devices
+SIM_DEVICES=50 SIM_RATE=200ms docker compose -f deploy/compose.yaml up -d
+```
+
+| Profile | Devices | Sites | Rate | Faults |
+|---|---|---|---|---|
+| `dev` | 200 | 4 | 1s | 0.2% per tick |
+| `demo` | 1 000 | 8 | 1s | 0.05% per tick |
+| `stress` | 10 000 | 32 | 1s | 0.01% per tick |
+
+Individual settings — `SIM_DEVICES`, `SIM_SITES`, `SIM_RATE`, `SIM_SEED`, `SIM_FLAP_PCT`,
+`SIM_FLAP_INTERVAL`, `SIM_FAULT_PCT` — override whichever profile is selected.
+
+Watching the wire directly is often more informative than any of the above:
 
 ```bash
 docker exec fleet-mosquitto mosquitto_sub -h localhost -t 'fleet/+/+/telemetry' -C 1
-docker exec fleet-mosquitto mosquitto_sub -h localhost -t 'fleet/+/+/status' -v
+docker exec fleet-mosquitto mosquitto_sub -h localhost -t 'fleet/+/+/event' -C 1
 ```
 
 Stopping:
 
 ```bash
 docker compose -f deploy/compose.yaml down       # stop
-docker compose -f deploy/compose.yaml down -v    # also drop retained status messages
+docker compose -f deploy/compose.yaml down -v    # also drop stored telemetry and the log
 ```
 
-Simulator tests, including a race-detector check on the shared sequence path:
+Tests, including the race detector and the schema conformance checks:
 
 ```bash
-cd devices/sim-go && go test -race ./...
+go test -race ./...
 ```
 
 ### Planned interface
@@ -267,16 +295,17 @@ engine behind these profiles adds fault injection and lifecycle events.
 Directories marked *planned* do not exist yet — see [Status](#status).
 
 ```
-contracts/              draft message contract; becomes OpenAPI/AsyncAPI/JSON Schema
+contracts/              JSON Schema for every device message, plus a Go validator
+  schemas/              the schemas themselves, embedded into every Go service
   vectors/              golden reconciliation vectors, run by every client   (planned)
-deploy/                 compose file, mosquitto config
+deploy/                 compose file, mosquitto config, database schema
 devices/
   sim-go/               Go fleet simulator
   agent-c/              C99 reference device agent                           (planned)
   scenarios/            fault injection and lifecycle definitions            (planned)
 services/
-  api-spike/            throwaway consumer + viewer, replaced by the two below
-  ingest/               Go ingest service                                    (planned)
+  api-spike/            throwaway viewer, replaced by the API and a real dashboard
+  ingest/               Go ingest service
   api/                  .NET 10 API service                                  (planned)
 clients/                                                                     (planned)
   dotnet/               shared state core, XAML ViewModels, WinUI, WPF, Blazor

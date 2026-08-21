@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rilegu.github.io/iot-fleet-reference/schemas/telemetry.json",
+  "title": "Device telemetry",
+  "description": "A periodic sample of a device's sensors. Published at QoS 0: a lost sample is acceptable, head-of-line blocking is not.",
+  "allOf": [{ "$ref": "envelope.json" }],
+  "type": "object",
+  "required": ["schema", "device_id", "site", "boot_id", "seq", "ts", "metrics"],
+  "properties": {
+    "schema": { "const": "telemetry/1" },
+    "metrics": {
+      "type": "object",
+      "required": ["temp_c", "humidity_pct", "voltage_v", "rssi_dbm", "uptime_s"],
+      "properties": {
+        "temp_c": { "type": "number", "minimum": -60, "maximum": 150 },
+        "humidity_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+        "voltage_v": { "type": "number", "minimum": 0, "maximum": 60 },
+        "rssi_dbm": { "type": "integer", "minimum": -120, "maximum": 0 },
+        "uptime_s": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "unevaluatedProperties": false
+}

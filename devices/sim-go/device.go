@@ -38,6 +38,14 @@ type Device struct {
 	seq       atomic.Uint64
 	startedAt time.Time
 
+	// faultPct is the chance per telemetry tick of injecting a fault.
+	faultPct float64
+
+	// clockSkew is seconds added to reported timestamps after a clock_step fault. It
+	// deliberately makes ts unusable for ordering, which is why the contract orders by
+	// (boot_id, seq) instead.
+	clockSkew float64
+
 	// sensor state, walked rather than randomised per sample so the dashboard shows
 	// something that looks like a physical process
 	tempC       float64
@@ -53,7 +61,7 @@ type Device struct {
 	conn net.Conn
 }
 
-func NewDevice(index int, site string, broker string, rate time.Duration, rng *rand.Rand) *Device {
+func NewDevice(index int, site string, broker string, rate time.Duration, faultPct float64, rng *rand.Rand) *Device {
 	return &Device{
 		ID:          fmt.Sprintf("dev-%06d", index),
 		Site:        site,
@@ -62,6 +70,7 @@ func NewDevice(index int, site string, broker string, rate time.Duration, rng *r
 		BootID:      randomHex(rng, 8),
 		broker:      broker,
 		rate:        rate,
+		faultPct:    faultPct,
 		rng:         rng,
 		tempC:       18 + rng.Float64()*12,
 		humidityPct: 35 + rng.Float64()*30,
@@ -81,7 +90,7 @@ func (d *Device) envelope(schema string) Envelope {
 		Site:        d.Site,
 		BootID:      d.BootID,
 		Seq:         d.seq.Add(1),
-		TS:          nowRFC3339(),
+		TS:          d.now(),
 		Traceparent: tp,
 	}
 }
@@ -182,20 +191,89 @@ func (d *Device) Flap() {
 	}
 }
 
+// now reports the device's own clock, including any skew a clock_step fault introduced.
+func (d *Device) now() string {
+	d.rngMu.Lock()
+	skew := d.clockSkew
+	d.rngMu.Unlock()
+	return time.Now().UTC().Add(time.Duration(skew) * time.Second).Format(time.RFC3339Nano)
+}
+
+// currentMetrics snapshots sensor state as it would be reported right now.
+func (d *Device) currentMetrics() Metrics {
+	d.rngMu.Lock()
+	defer d.rngMu.Unlock()
+	return Metrics{
+		TempC:       round2(d.tempC),
+		HumidityPct: round2(d.humidityPct),
+		VoltageV:    round2(d.voltageV),
+		RSSIdBm:     int(math.Round(d.rssiDBm)),
+		UptimeS:     int64(time.Since(d.startedAt).Seconds()),
+	}
+}
+
+// buildEvent composes the event a fault reports, reading the affected metric's current
+// value so the event carries evidence rather than only a label.
+func (d *Device) buildEvent(f Fault) Event {
+	ev := Event{
+		Envelope: d.envelope(SchemaEvent),
+		Kind:     f.Kind,
+		Severity: f.Severity,
+		Detail:   f.Detail,
+		Metric:   f.Metric,
+	}
+	if f.Metric != "" {
+		m := d.currentMetrics()
+		var v float64
+		switch f.Metric {
+		case "temp_c":
+			v = m.TempC
+		case "humidity_pct":
+			v = m.HumidityPct
+		case "voltage_v":
+			v = m.VoltageV
+		case "rssi_dbm":
+			v = float64(m.RSSIdBm)
+		}
+		ev.Value = &v
+	}
+	return ev
+}
+
+// maybeInjectFault rolls for a fault, applies it to sensor state and publishes the event.
+func (d *Device) maybeInjectFault() {
+	if d.faultPct <= 0 {
+		return
+	}
+	d.rngMu.Lock()
+	roll := d.rng.Float64() * 100
+	var f Fault
+	if roll < d.faultPct {
+		f = pickFault(d.rng)
+		f.apply(d, d.rng)
+	}
+	d.rngMu.Unlock()
+
+	if f.Kind == "" {
+		return
+	}
+	payload := mustJSON(d.buildEvent(f))
+	// QoS 1: an event describes a transition that telemetry will not repeat.
+	token := d.client.Publish(topicEvent(d.Site, d.ID), 1, false, payload)
+	if !token.WaitTimeout(5 * time.Second) {
+		slog.Warn("event publish timed out", "device", d.ID, "kind", f.Kind)
+	}
+}
+
 func (d *Device) publishTelemetry() {
 	if !d.client.IsConnected() {
 		return
 	}
 	d.walk()
+	d.maybeInjectFault()
 	payload := mustJSON(Telemetry{
 		Envelope: d.envelope(SchemaTelemetry),
-		Metrics: Metrics{
-			TempC:       round2(d.tempC),
-			HumidityPct: round2(d.humidityPct),
-			VoltageV:    round2(d.voltageV),
-			RSSIdBm:     int(math.Round(d.rssiDBm)),
-			UptimeS:     int64(time.Since(d.startedAt).Seconds()),
-		},
+		Metrics:  d.currentMetrics(),
 	})
 	// QoS 0: telemetry is a sample of a continuous signal. A dropped sample is
 	// acceptable; head-of-line blocking is not.
@@ -230,6 +308,7 @@ func (d *Device) shutdown() {
 func (d *Device) walk() {
 	d.rngMu.Lock()
 	defer d.rngMu.Unlock()
+
 	d.tempC = clamp(d.tempC+(d.rng.Float64()-0.5)*0.4, -10, 85)
 	d.humidityPct = clamp(d.humidityPct+(d.rng.Float64()-0.5)*1.2, 0, 100)
 	d.voltageV = clamp(d.voltageV+(d.rng.Float64()-0.5)*0.05, 10.5, 13.0)

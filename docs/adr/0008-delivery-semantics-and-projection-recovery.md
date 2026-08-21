@@ -23,14 +23,57 @@ into an unreliable system. This ADR makes it explicit.
 | device → broker (telemetry) | at-most-once (QoS 0) | Telemetry is a sample of a continuous signal. A dropped sample is acceptable; head-of-line blocking is not. |
 | device → broker (status, events, commands, acks) | at-least-once (QoS 1) | These are state transitions. Losing one corrupts fleet state. |
 | broker → ingest | at-least-once for QoS 1 topics | Follows from the above. |
-| ingest → TimescaleDB | at-least-once, idempotent write | Duplicate writes collapse on `(device_id, seq)`. |
+| ingest → TimescaleDB (status, events) | at-least-once, idempotent write | Primary key `(device_id, boot_id, seq)`; redelivery is a no-op. |
+| ingest → TimescaleDB (telemetry) | at-most-once, atomic batch | See *Why telemetry is not deduplicated* below. |
 | ingest → NATS JetStream | at-least-once, publish-confirmed | Ingest does not acknowledge the broker until JetStream confirms. |
 | NATS → API projection | at-least-once, idempotent apply | Redelivery must not corrupt state. |
 | API → dashboard | coalesced, lossy by design | Deltas are last-write-wins per device; a dropped frame is superseded by the next. |
 
-**The system is at-least-once everywhere it matters, and every consumer is idempotent.**
-That combination yields effectively-once *state* without requiring exactly-once *delivery*,
-which no distributed system provides honestly.
+**The system is at-least-once everywhere duplicates can occur, and every consumer of those
+streams is idempotent.** That combination yields effectively-once *state* without requiring
+exactly-once *delivery*, which no distributed system provides honestly.
+
+### Why telemetry is not deduplicated
+
+Telemetry is the one hop that does not get an idempotency key, for three reasons.
+
+**A hypertable unique index must include the partitioning column.** The key cannot be
+`(device_id, seq)`; TimescaleDB requires `(device_id, boot_id, seq, time)`. That is a
+constraint of the storage chosen in [ADR-0003](0003-telemetry-storage.md), not a matter of
+preference.
+
+**There is no duplicate source to defend against.** Telemetry is published at QoS 0, so the
+broker never redelivers it. Status and events — the streams the broker *does* redeliver —
+carry real primary keys and are genuinely idempotent. The guarantee is enforced exactly
+where it is load-bearing.
+
+**It would cost most where it buys least.** Telemetry outweighs every other table by orders
+of magnitude, so a unique index taxes write throughput and storage across the whole fleet in
+order to defend against nothing.
+
+Instead, each telemetry batch is written inside a single transaction. A partially applied
+batch therefore cannot exist, which is the property that actually matters: a retry after a
+failed write cannot double-insert rows that already committed.
+
+This is achievable rather than impossible, and the decision should be re-opened if the
+premises change. `received_at` is stamped when the message arrives, not when it is written,
+so a retried batch carries identical `time` values and `(device_id, boot_id, seq, time)`
+*would* collide correctly. Implementing it means giving up `COPY` for `INSERT ... ON
+CONFLICT` or a staging-table merge, and paying for an index on the largest table. If
+telemetry ever moves to QoS 1, that trade flips and this section should be revisited.
+
+### Consequences of that choice, stated plainly
+
+Two behaviours follow from it, and both are deliberate rather than accidental:
+
+- **A telemetry batch that fails to write is discarded, not retried.** This is consistent
+  with at-most-once delivery. It is counted in `write_failures` and must stay visible:
+  loss that nothing records is the failure this document exists to prevent.
+- **A batch may reach the database but fail to reach the log.** Those samples are in
+  history but absent from the stream, so a projection built purely from replay will not
+  have them until it queries history. Acceptable for a lossy sampled signal; it would not
+  be acceptable for status or events, which is why those are published one at a time and
+  acknowledged only after both writes succeed.
 
 ### Sequence numbers, not timestamps
 
@@ -159,6 +202,15 @@ produce it.
   devices. The CBOR encoding path exists partly to offset this.
 - Observability must be built early rather than late, because debugging the split without
   tracing is the risk this ADR exists to remove.
+
+## Revision history
+
+The delivery table originally specified a single `ingest → TimescaleDB` hop with duplicate
+writes collapsing on `(device_id, seq)`. Implementing it showed that a hypertable cannot
+carry that key, and that telemetry has no duplicate source to justify paying for one. The
+decision is unchanged — at-least-once with idempotent consumers — but it is now stated per
+stream rather than uniformly, and the telemetry trade-off is written down instead of being
+an accident of the implementation.
 
 ## Notes
 
