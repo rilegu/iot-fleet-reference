@@ -1,0 +1,25 @@
+# Datasources provisioned as files rather than clicked in.
+#
+# A dashboard that only exists in someone's browser is not part of the repository. This way
+# the stack comes up with its sources already wired, and the configuration is reviewable.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 10s
+
+  - name: Jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    jsonData:
+      # Links a span to the metrics for the same service, so a slow trace can be compared
+      # against what the rest of the fleet was doing at that moment.
+      tracesToMetrics:
+        datasourceUid: prometheus

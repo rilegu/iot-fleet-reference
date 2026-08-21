@@ -67,7 +67,8 @@ The remaining UI frameworks are not built, so there is nothing to compare yet.
 | Contract conformance + CI | ✅ | CI builds everything, runs every test under the race detector, brings up the stack and validates the running API against the contract |
 | TLS, per-device identity, broker ACLs | ⬜ | |
 | API authentication, authorization, audit | ⬜ | |
-| Distributed tracing (OpenTelemetry) | ⬜ | Built before the ingest split, not after |
+| Distributed tracing (OpenTelemetry) | ✅ | One trace spans device to dashboard; the device's W3C context travels in the payload because MQTT 3.1.1 has no header for it |
+| Metrics and dashboards | ✅ | Prometheus scrapes the simulator, ingest and API; Grafana and Jaeger under an `observability` profile |
 | Projection checkpoint and replay | ⬜ | |
 | Chaos suite | ⬜ | Kill each component, assert the fleet state converges |
 | Device conformance suite (Python) | ⬜ | |
@@ -198,6 +199,25 @@ http://localhost:8090     dashboard
 http://localhost:8080     API
 http://localhost:9101     ingest counters
 ```
+
+Tracing and dashboards are a separate profile, off by default because they cost four more
+containers and roughly a gigabyte of memory:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317 OTEL_GRPC_ENDPOINT=http://otel-collector:4317   docker compose -f deploy/compose.yaml --profile full --profile observability up -d
+```
+
+```
+http://localhost:16686    traces (Jaeger)
+http://localhost:9090     metrics (Prometheus)
+http://localhost:3000     dashboards (Grafana)
+```
+
+A single trace spans device to dashboard. The device's W3C context travels inside the
+message payload, because MQTT 3.1.1 has no header to carry it, and ingest lifts it back out
+so its span joins the same trace rather than starting a new one. Without the endpoint
+variables set, both services log that tracing is disabled and run exactly as before —
+observability failing is not an outage of the thing being observed.
 
 Omit `--profile full` to leave the API and dashboard out and run either on your machine with
 a debugger attached:

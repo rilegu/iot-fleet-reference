@@ -5,6 +5,13 @@
 #
 #   docker compose up -d                  broker, fleet, database, log, ingest
 #   docker compose --profile full up -d   the above plus the API and dashboard
+#
+# Tracing and dashboards are a third profile, off by default:
+#
+#   docker compose --profile full --profile observability up -d
+#
+# Separate because it is four more containers and roughly a gigabyte of memory, which is
+# not worth paying for on every run of the fleet.
 
 name: iot-fleet
 
@@ -48,6 +55,7 @@ services:
       # so the broker publishes their Last Will. This is how presence detection is exercised.
       SIM_FLAP_PCT: "${SIM_FLAP_PCT:-2}"
       SIM_FLAP_INTERVAL: "${SIM_FLAP_INTERVAL:-20s}"
+      SIM_METRICS_ADDR: ":9102"
     ulimits:
       # One TCP connection per device. The default file-descriptor limit does not cover
       # the thousand-device profile, and the failure mode is an opaque connection error.
@@ -115,6 +123,10 @@ services:
       INGEST_DATABASE_URL: postgres://fleet:fleet@timescaledb:5432/fleet
       INGEST_NATS_URL: nats://nats:4222
       INGEST_HTTP_ADDR: ":9101"
+      # Empty disables tracing. Set by the observability profile's override rather than
+      # here, so the default stack has no dependency on a collector existing.
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-0.05}"
       # Sites this instance owns. Empty means the whole fleet; partitioning across
       # instances becomes necessary at stress scale because MQTT 3.1.1 has no shared
       # subscriptions.
@@ -142,6 +154,11 @@ services:
       Log__Stream: FLEET
       Log__Consumer: fleet-api
       Database__Url: "Host=timescaledb;Port=5432;Database=fleet;Username=fleet;Password=fleet"
+      # Empty disables the trace exporter; metrics are scraped and need no endpoint.
+      # The .NET OTLP exporter speaks gRPC by default, so this must be the collector's
+      # gRPC port. Pointing it at 4318 fails silently: exports error in the background and
+      # the service keeps serving, so the only symptom is spans never arriving.
+      Otel__Endpoint: "${OTEL_GRPC_ENDPOINT:-}"
     ports:
       - "8080:8080"
     healthcheck:
@@ -179,7 +196,71 @@ services:
     ports:
       - "8090:8090"
 
+  otel-collector:
+    profiles: ["observability"]
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: fleet-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC, used by the Go services
+      - "4318:4318"   # OTLP HTTP, used by the .NET services
+      - "8888:8888"   # the collector's own metrics
+    depends_on:
+      - jaeger
+
+  jaeger:
+    profiles: ["observability"]
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: fleet-jaeger
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"  # trace UI
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v3.1.0
+    container_name: fleet-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      # Short retention on purpose: this exists to answer questions about a run in progress,
+      # not to be a long-term metrics store.
+      - --storage.tsdb.retention.time=6h
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:11.4.0
+    container_name: fleet-grafana
+    restart: unless-stopped
+    environment:
+      # Anonymous admin. This is a local stack with no data worth protecting, and a login
+      # prompt between an engineer and a graph during an incident is friction, not security.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_FEATURE_TOGGLES_ENABLE: traceToMetrics
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - jaeger
+
 volumes:
+  prometheus-data:
+  grafana-data:
   dashboard-keys:
   mosquitto-data:
   timescale-data:

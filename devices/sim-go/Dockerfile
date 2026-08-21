@@ -9,6 +9,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY contracts/ ./contracts/
+# Shared instrumentation, used by every Go service.
+COPY telemetry/ ./telemetry/
 COPY devices/sim-go/ ./devices/sim-go/
 
 # Static binary: no cgo, so it runs on a scratch base with no libc. Trimpath and stripped

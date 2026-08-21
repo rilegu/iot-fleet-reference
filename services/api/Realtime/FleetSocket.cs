@@ -33,6 +33,19 @@ public sealed class FleetSocket
 
     public async Task HandleAsync(WebSocket socket, CancellationToken ct)
     {
+        FleetTelemetry.SocketOpened();
+        try
+        {
+            await PumpAsync(socket, ct);
+        }
+        finally
+        {
+            FleetTelemetry.SocketClosed();
+        }
+    }
+
+    private async Task PumpAsync(WebSocket socket, CancellationToken ct)
+    {
         var cadence = TimeSpan.FromMilliseconds(250);
 
         // A client may ask for a slower cadence, never a faster one. The server's rate is a
@@ -43,13 +56,17 @@ public sealed class FleetSocket
 
         var frame = 0L;
 
+        var snapshot = _projection.Snapshot().OrderBy(d => d.DeviceId, StringComparer.Ordinal).ToArray();
         await SendAsync(socket, new SnapshotFrame
         {
             Frame = ++frame,
             CadenceMs = (int)cadence.TotalMilliseconds,
-            Devices = _projection.Snapshot().OrderBy(d => d.DeviceId, StringComparer.Ordinal).ToArray(),
+            Devices = snapshot,
             Aggregates = _projection.Aggregates(),
         }, ct);
+        FleetTelemetry.FramesSent.Add(1, new KeyValuePair<string, object?>("type", "snapshot"));
+        FleetTelemetry.FrameDevices.Record(snapshot.Length,
+            new KeyValuePair<string, object?>("type", "snapshot"));
 
         using var timer = new PeriodicTimer(cadence);
 
@@ -77,6 +94,9 @@ public sealed class FleetSocket
                 Changed = devices,
                 Aggregates = aggregates,
             }, ct);
+            FleetTelemetry.FramesSent.Add(1, new KeyValuePair<string, object?>("type", "delta"));
+            FleetTelemetry.FrameDevices.Record(devices.Count,
+                new KeyValuePair<string, object?>("type", "delta"));
         }
 
         if (socket.State == WebSocketState.Open)

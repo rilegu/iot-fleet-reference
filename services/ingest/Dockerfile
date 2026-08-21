@@ -8,6 +8,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY contracts/ ./contracts/
+# Shared instrumentation, used by every Go service.
+COPY telemetry/ ./telemetry/
 COPY services/ingest/ ./services/ingest/
 
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ingest ./services/ingest

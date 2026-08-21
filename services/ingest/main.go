@@ -20,7 +20,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rilegu/iot-fleet-reference/contracts"
+	"github.com/rilegu/iot-fleet-reference/telemetry"
 )
 
 type config struct {
@@ -39,6 +41,25 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Tracing is optional and degrades quietly: a collector being unreachable must not stop
+	// the pipeline ingesting, because observability failing is not an outage of the thing
+	// being observed.
+	shutdownTracing, err := telemetry.Setup(ctx, telemetry.ConfigFromEnv("fleet-ingest"))
+	if err != nil {
+		log.Warn("continuing without tracing", "err", err)
+		shutdownTracing = func(context.Context) error { return nil }
+	}
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(flushCtx); err != nil {
+			log.Warn("flushing traces failed", "err", err)
+		}
+	}()
+
+	registry := NewRegistry()
+	metrics := NewIngestMetrics(registry)
 
 	validator, err := contracts.NewValidator()
 	if err != nil {
@@ -60,9 +81,9 @@ func main() {
 	defer bus.Close()
 	log.Info("event log ready", "stream", StreamName)
 
-	in := NewIngest(cfg.broker, cfg.sites, validator, store, bus, log)
+	in := NewIngest(cfg.broker, cfg.sites, validator, store, bus, metrics, log)
 
-	srv := startHTTP(cfg.httpAddr, in, log)
+	srv := startHTTP(cfg.httpAddr, in, registry, log)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -77,8 +98,12 @@ func main() {
 
 // startHTTP exposes liveness, readiness and counters. Counters are the only way to see
 // drops, and a drop nobody can see is the failure this pipeline most wants to avoid.
-func startHTTP(addr string, in *Ingest, log *slog.Logger) *http.Server {
+func startHTTP(addr string, in *Ingest, reg *prometheus.Registry, log *slog.Logger) *http.Server {
 	mux := http.NewServeMux()
+
+	// Prometheus alongside the hand-rolled JSON rather than replacing it. The JSON needs
+	// no infrastructure to read, which is what makes it useful during a local failure.
+	telemetry.ServeMetrics(mux, reg)
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
