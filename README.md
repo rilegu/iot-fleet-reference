@@ -70,7 +70,7 @@ The remaining UI frameworks are not built, so there is nothing to compare yet.
 | Distributed tracing (OpenTelemetry) | ✅ | One trace spans device to dashboard; the device's W3C context travels in the payload because MQTT 3.1.1 has no header for it |
 | Metrics and dashboards | ✅ | Prometheus scrapes the simulator, ingest and API; Grafana and Jaeger under an `observability` profile |
 | Projection checkpoint and replay | ⬜ | |
-| Chaos suite | ⬜ | Kill each component, assert the fleet state converges |
+| Chaos suite | ✅ | Six scenarios in CI: kill ingest, the log or the API mid-stream, replay the whole log, reboot a device, and load the bounded queue |
 | Device conformance suite (Python) | ⬜ | |
 | Scale testing to 10 000 devices | ⬜ | |
 | Published UI comparison | ⬜ | |
@@ -327,6 +327,19 @@ Whether the running API still matches its contract:
 pip install pyyaml jsonschema
 python tools/contract_test.py --base-url http://localhost:8080
 ```
+
+Whether it survives losing each component in turn:
+
+```bash
+python tools/chaos_test.py              # all six scenarios
+python tools/chaos_test.py --list       # names
+python tools/chaos_test.py --only kill-api
+```
+
+Each scenario publishes a uniquely identifiable message *during* an outage and proves it
+arrives afterwards. Counting rows before and after does not work: the simulated fleet keeps
+publishing throughout, so any total is a moving target and a test built on one passes for
+the wrong reason.
 
 All of the above runs in CI on every push, along with a full stack build that asserts the
 pipeline lost nothing and the projection detected no gaps.

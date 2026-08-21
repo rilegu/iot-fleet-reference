@@ -198,7 +198,16 @@ None of the above is credible as an assertion. It is verified by chaos tests in 
 
 The reference state for these comparisons is computed independently from TimescaleDB by the
 Python suite in `tools/`, so the projection is checked against something that did not
-produce it.
+produce it. Implemented as `tools/chaos_test.py` and run in CI.
+
+**One mechanism these tests made concrete.** The backpressure table above says QoS 1 flow
+control is achieved by ingest stopping reading and letting the broker push back. In
+practice that limit is the broker's in-flight window — twenty unacknowledged messages by
+default — after which Mosquitto simply stops delivering to that client. So the number of
+messages ingest can hold unacknowledged during an outage is bounded by broker configuration
+rather than by anything in this repository, and raising `max_inflight_messages` is what
+widens it. Worth knowing before tuning: a larger window means more redelivery after a crash,
+not more throughput.
 
 ## Consequences
 
